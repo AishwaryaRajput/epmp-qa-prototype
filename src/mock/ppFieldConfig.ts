@@ -314,7 +314,7 @@ const PP11: PpFieldSpec[] = [
   // Deviation (correction beyond MRD): MSIL only — the pop-up asks "raised?", then the E-Doc number; the status is fetched.
   { k: 'deviation_raised', l: 'Deviation raised', t: 'yesNo', by: 'PIC', section: 'Deviation' },
   { k: 'e_doc_number', l: 'E-Doc number', t: 'text', by: 'PIC', section: 'Deviation', search: true },
-  { k: 'deviation_approval_status', l: 'Deviation approval status', t: 'dropdown', o: ['Approved (OK with deviation)', 'Rejected (NG)', 'Pending', 'In progress'], by: 'System', src: 'edoc', edocFrom: 'e_doc_number', section: 'Deviation', dash: true }
+  { k: 'deviation_approval_status', l: 'Deviation approval status', t: 'dropdown', o: ['Approved', 'Pending', 'Rejected'], by: 'PIC', section: 'Deviation', dash: true }
 ]
 
 // ── PP06 · Newness confirmation – Mizenboshi status (PIC enters everything) ─────────────────────────────────────
@@ -443,7 +443,7 @@ const HOMOLOG: PpFieldSpec[] = [
   // Deviation answers: PIC only, entered in the pop-up (DeviationTrigger.popupOnly) and never shown to the vendor.
   { k: 'deviation_raised', l: 'Deviation raised', t: 'yesNo', by: 'PIC' },
   { k: 'e_doc_number', l: 'E-Doc number', t: 'text', by: 'PIC', search: true },
-  { k: 'e_doc_approval_status', l: 'E-Doc approval status', t: 'dropdown', o: ['Approved', 'Under approval', 'Rejected'], by: 'PIC', src: 'edoc', edocFrom: 'e_doc_number', dash: true }
+  { k: 'e_doc_approval_status', l: 'Deviation approval status', t: 'dropdown', o: ['Approved', 'Pending', 'Rejected'], by: 'PIC', dash: true }
 ]
 const HOMOLOG_CONFIG: PpActivityConfig = {
   fields: HOMOLOG,
@@ -457,7 +457,7 @@ const HOMOLOG_CONFIG: PpActivityConfig = {
     statusField: 'e_doc_approval_status',
     raisedField: 'deviation_raised',
     manualStatus: true,
-    fetchStatus: true,
+    fetchStatus: false,
     popupOnly: true,
     approvalChain: false,
     enteredBy: 'PIC'
@@ -505,9 +505,16 @@ const ppvtCols = (pic: boolean): TableColumn[] => {
   const vendorCol = (rule: ConditionNode | undefined): ConditionNode | undefined => (pic ? (rule ? AND(PIC_DONE, rule) : PIC_DONE) : rule)
   return [
     { key: 'volume', label: 'PPVT volume / day', type: 'number', enteredBy: by(true), required: true },
+    // MSIL scope (field sheet "PPVT MSIL scope planned date / actual date"): the PIC's own PPVT dates.
+    ...(pic ? [
+      { key: 'planned_date', label: 'MSIL PPVT planned date', type: 'date', enteredBy: 'PIC' } as TableColumn,
+      { key: 'actual_date', label: 'MSIL PPVT actual date', type: 'date', enteredBy: 'PIC' } as TableColumn
+    ] : []),
     { key: 'target_date', label: 'PPVT target date', type: 'date', enteredBy: by(false), required: !pic, showRule: vendorCol(undefined) },
     { key: 'result', label: 'PPVT OK / NG', type: 'dropdown', options: ['OK', 'NG'], enteredBy: by(true), required: true },
+    { key: 'ok_ng_details', label: 'PPVT OK / NG details', type: 'longText', enteredBy: by(true) },
     { key: 'ng_type', label: 'If NG: Quality or Capacity NG', type: 'dropdown', options: NG_TYPES, enteredBy: by(true), showRule: rNg, requiredRule: rNg },
+    { key: 'ng_category', label: 'PPVT NG category', type: 'dropdown', options: ['Red', 'Yellow', 'Green'], enteredBy: by(true), showRule: rNg, requiredRule: rNg },
     { key: 'capacity_issue', label: 'Capacity NG issue', type: 'text', enteredBy: by(true), showRule: rCap, requiredRule: rCap },
     { key: 'capacity_observed', label: 'Capacity observed / day (actual volume / 16 hrs at 80% efficiency)', type: 'number', enteredBy: by(true), showRule: rCap, requiredRule: rCap },
     {
@@ -554,6 +561,7 @@ const PPVT: PpFieldSpec[] = [
         { label: 'PPVT volume / day', left: `${SELF}.volume`, right: `${MSIL}.volume` },
         { label: 'PPVT OK / NG', left: `${SELF}.result`, right: `${MSIL}.result` },
         { label: 'NG type', left: `${SELF}.ng_type`, right: `${MSIL}.ng_type` },
+        { label: 'PPVT NG category', left: `${SELF}.ng_category`, right: `${MSIL}.ng_category` },
         { label: 'Capacity NG issue', left: `${SELF}.capacity_issue`, right: `${MSIL}.capacity_issue` },
         { label: 'Capacity observed / day', left: `${SELF}.capacity_observed`, right: `${MSIL}.capacity_observed` },
         { label: 'Shortage / day', left: `${SELF}.shortage`, right: `${MSIL}.shortage` },
@@ -586,6 +594,7 @@ const PPVT: PpFieldSpec[] = [
       { key: 'capacity_cm_category', label: 'Capacity NG c/m category', type: 'dropdown', options: ['Additional facility installed', 'Additional working hours (not 3 shifts)', 'Three-shift working'], enteredBy: 'PIC', showRule: AND(fCap, ACTING) },
       { key: 'capacity_impl_date', label: 'Implementation date for capacity NG c/m', type: 'date', enteredBy: 'Vendor', showRule: AND(fCap, ACTING) },
       { key: 'quality_concern_category', label: 'Quality NG concern category', type: 'dropdown', options: ['Part correction', 'Process correction', 'Both'], enteredBy: 'PIC', showRule: AND(fQual, ACTING) },
+      { key: 'broad_quality_cm_category', label: 'Broad quality countermeasure category', type: 'longText', enteredBy: 'PIC', showRule: AND(fQual, ACTING) },
       { key: 'quality_impl_date', label: 'Implementation date for quality NG c/m', type: 'date', enteredBy: 'Vendor', showRule: AND(fQual, ACTING) },
       { key: 'final_closure_date', label: 'Final date for closure', type: 'date', enteredBy: 'Vendor', showRule: ACTING }
     ]
@@ -698,12 +707,13 @@ export const PP_FIELD_CONFIG: Record<string, PpActivityConfig> = {
     deviation: {
       when: NG_BEYOND_MRD,
       title: 'Deviation — NG correction beyond MRD',
-      message: 'A correction timeline is beyond the MRD. Was a deviation raised? Enter its E-Doc number; the approval status comes from E-Doc.',
+      message: 'A correction timeline is beyond the MRD. Was a deviation raised? Enter its E-Doc number and the deviation approval status.',
       raisedField: 'deviation_raised',
       edocField: 'e_doc_number',
       statusField: 'deviation_approval_status',
       enteredBy: 'PIC',
-      fetchStatus: true,
+      fetchStatus: false,
+      manualStatus: true,
       approvalChain: false
     },
     testScenarios: [

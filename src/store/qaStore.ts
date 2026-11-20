@@ -1813,11 +1813,20 @@ export const useQAStore = create<QAStoreState>()(
         set((state) => {
           void clearBlobs()
           const d = buildDemoData(state.activities, state.templateRows, state.models)
-          // "From scratch": the parts (released to and acknowledged by the vendor) with every activity empty, so a part's
-          // journey can be shown end to end; nothing filled, submitted, delayed or raised.
+          // "From scratch": the parts (released to and acknowledged by the vendor) with nothing entered by people, so a
+          // part's journey can be shown end to end; nothing filled, submitted, delayed or raised. What the systems
+          // provide (ENOVIA, SAP, … fields entered by "System") stays, as it would in production — e.g. the OT planned date.
           if (mode === 'blank') {
+            const systemKeys = new Map(state.activities.map((a) => [a.id, new Set(a.fields.filter((f) => f.enteredBy === 'System' && f.source !== 'manual' && f.source !== 'calculated').map((f) => f.key))]))
+            const entries = d.entries
+              .map((e) => {
+                const keys = systemKeys.get(e.activityId) ?? new Set<string>()
+                const values = Object.fromEntries(Object.entries(e.values ?? {}).filter(([k, v]) => keys.has(k) && v !== undefined && v !== null && v !== ''))
+                return { id: e.id, templateRowId: e.templateRowId, activityId: e.activityId, partNo: e.partNo, values, validationState: 'Draft' as const, history: [], currentStepIndex: 0, updatedAt: new Date().toISOString(), updatedBy: 'System' as const }
+              })
+              .filter((e) => Object.keys(e.values).length > 0)
             return {
-              parts: d.parts, entries: [], partReleases: d.partReleases, partAcks: d.partAcks, partEvents: [], picAssignments: [],
+              parts: d.parts, entries, partReleases: d.partReleases, partAcks: d.partAcks, partEvents: [], picAssignments: [],
               delayReasons: [], models: d.models, documents: [], historyTransferRequests: [], notifications: [], auditLog: []
             }
           }

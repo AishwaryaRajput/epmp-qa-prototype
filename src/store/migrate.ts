@@ -8,13 +8,15 @@
  *   - activities whose rule configuration moved into data (see RULE_CONFIG_IDS) take the new seed definition,
  *   - missing master lists are added; existing ones (possibly edited by the Admin) are kept.
  */
-import type { ActivityDefinition, ActivityEntry, MasterList } from '../domain'
+import type { ActivityDefinition, ActivityEntry, FieldDefinition, MasterList } from '../domain'
 import { legacyToRules, normalizeReasonRemark } from '../engine/rules'
 
 // v49: OT status (pp-9) corrections — new pp-9 definition (taken from the seed via RULE_CONFIG_IDS), plain-text reason +
 // remark values turned into { reason, remark } (any activity), old pp-9 status words cleared, the Delay / Non-OT reason
 // lists replaced unless an Admin had edited them.
-export const STORE_VERSION = 63
+export const STORE_VERSION = 64
+// v64: no E-Doc integration — every E-Doc number and deviation approval status is entered by the PIC; approval statuses
+// are Approved / Pending / Rejected (old values mapped). OT reason tables gain an Action plan column (from the seed).
 // v63: SOR sharing (pp-3) and SOR Adherence (mpp-12) take the current seed definition on upgrade (an older stored pp-3
 // had other review columns, so the PIC saw no Accept / Send back). Old point columns are mapped (PIC "Reject" → "Send
 // back", PIC remarks → PIC remark), and points of a submitted form that never entered the review start at the PIC.
@@ -310,10 +312,31 @@ export function migrateEntryValues(activityId: string, entry0: ActivityEntry): A
   return { ...entry, values: v, history }
 }
 
+const APPROVAL_STATUS_KEY = /approval_status|deviation_status/
+/** v64: an E-Doc field on the form (not data-only) is entered by the PIC; approval statuses are Approved / Pending / Rejected. */
+function manualEdocField(f: FieldDefinition): FieldDefinition {
+  if (f.dataOnly || !(f.source === 'edoc' || f.edocFrom)) return f
+  const approval = f.type === 'dropdown' && APPROVAL_STATUS_KEY.test(f.key)
+  return { ...f, enteredBy: 'PIC', source: 'manual', edocFrom: undefined, ...(approval ? { options: ['Approved', 'Pending', 'Rejected'] } : {}) }
+}
+/** v64: old approval-status values in the three-value list. */
+const OLD_APPROVAL: Record<string, string> = { 'Approved (OK with deviation)': 'Approved', 'Rejected (NG)': 'Rejected', 'In progress': 'Pending', 'Under approval': 'Pending', Accept: 'Approved', Reject: 'Rejected' }
+function mapApprovalValues(e: ActivityEntry): ActivityEntry {
+  const v = e.values ?? {}
+  let changed = false
+  const next = { ...v }
+  for (const k of Object.keys(v)) {
+    if (APPROVAL_STATUS_KEY.test(k) && typeof v[k] === 'string' && OLD_APPROVAL[v[k]]) { next[k] = OLD_APPROVAL[v[k]]; changed = true }
+  }
+  return changed ? { ...e, values: next } : e
+}
+
 export function migrateActivity(a: ActivityDefinition): ActivityDefinition {
   return {
     ...a,
-    fields: a.fields.map((f) => {
+    deviation: a.deviation ? { ...a.deviation, fetchStatus: false, manualStatus: true } : a.deviation,
+    fields: a.fields.map((f0) => {
+      const f = manualEdocField(f0)
       if (!f.conditionalRules?.length) return f
       const { conditionalRules: _legacy, ...rest } = f
       void _legacy
@@ -370,7 +393,7 @@ export function migrateStore(persisted: unknown, _from: number, seeds: Migration
   const masterLists = [...lists, ...seeds.masterLists.filter((m) => !lists.some((l) => l.id === m.id))]
   const defOf = (id: string) => activities.find((a) => a.id === id) ?? seedById.get(id)
   const entries: ActivityEntry[] = (Array.isArray(s.entries) ? s.entries : []).map((e: ActivityEntry) =>
-    migrateReasonRemarks(migrateEntryValues(e.activityId, e), defOf(e.activityId), masterLists)
+    mapApprovalValues(migrateReasonRemarks(migrateEntryValues(e.activityId, e), defOf(e.activityId), masterLists))
   )
   // Nothing stored (fresh browser or very old shape): let the store start from its seeds.
   if (!stored.length && !entries.length) return {}

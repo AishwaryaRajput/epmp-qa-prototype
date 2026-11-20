@@ -39,7 +39,7 @@ const show = (f: FieldDefinition | undefined, v: any): string => {
 }
 /** A closed cycle of a repeating loop, read-only: its tables and values as they were when the cycle closed. */
 function CycleView({ c, activity }: { c: GroupCycle; activity: ActivityDefinition }) {
-  const fields = activity.fields.filter((f) => f.key in c.values && !f.hidden)
+  const fields = activity.fields.filter((f) => f.key in c.values)
   const tables = fields.filter((f) => f.type === 'table' && Array.isArray(c.values[f.key]) && c.values[f.key].length)
   const plain = fields.filter((f) => f.type !== 'table' && c.values[f.key] !== undefined && c.values[f.key] !== '')
   return (

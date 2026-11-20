@@ -808,6 +808,8 @@ export function groupSubmit(prev: GroupReviewState | undefined, snapshot: Record
   return {
     status: 'inReview',
     escalated: prev?.escalated,
+    // Closed cycles of a repeating loop stay with the loop (a new round never drops them).
+    ...(prev?.cycles?.length ? { cycles: prev.cycles } : {}),
     rounds: [...rounds, { round: rounds.length + 1, submittedBy: by, submittedAt: now, snapshot, ...(partialKeys?.length ? { partialKeys, before } : {}) }]
   }
 }

@@ -66,10 +66,12 @@ export const ACTIVITY_RULE_OVERLAY: Record<string, Pick<PpActivityConfig, 'devia
     deviation: {
       when: AND(filled(F('actual_otop_date')), filled(MRD), gt(F('actual_otop_date'), MRD)),
       title: 'Deviation — Actual date beyond MRD',
-      message: 'The actual date is beyond the MRD. A deviation E-Doc is required: enter the E-Doc number to fetch its approval status.',
+      message: 'The actual date is beyond the MRD. A deviation E-Doc is required: enter the E-Doc number and the deviation approval status.',
       edocField: 'e_doc_number',
       statusField: 'deviation_approval_status',
-      enteredBy: 'PIC'
+      enteredBy: 'PIC',
+      fetchStatus: false,
+      manualStatus: true
     }
   }
 }
@@ -117,9 +119,11 @@ const needsDelayReason = AND(
 )
 const goAheadApplicable = eq(F('applicability_of_msil_tool_go_ahead'), K('Y'))
 /** Reason rows: a reason from a master list and a remark per row; the user adds as many rows as there are reasons. */
-const reasonRows = (listId: string, o: { reasonRequired: boolean; remarkBy?: 'PIC' | 'Vendor' }): TableColumn[] => [
+const reasonRows = (listId: string, o: { reasonRequired: boolean; remarkBy?: 'PIC' | 'Vendor'; actionPlan?: boolean }): TableColumn[] => [
   { key: 'reason', label: 'Reason', type: 'dropdown', optionsFrom: listId, required: o.reasonRequired },
-  { key: 'remark', label: 'Remark', type: 'longText', required: true, enteredBy: o.remarkBy }
+  { key: 'remark', label: 'Remark', type: 'longText', required: true, enteredBy: o.remarkBy },
+  // OT: the vendor's action plan for each reason.
+  ...(o.actionPlan ? [{ key: 'action_plan', label: 'Action plan', type: 'longText', required: true, enteredBy: 'Vendor' } as TableColumn] : [])
 ]
 
 const PP9: PpFieldSpec[] = [
@@ -157,15 +161,15 @@ const PP9: PpFieldSpec[] = [
     }
   },
   {
-    k: 'ot_delay_reason', l: 'Delay reason and remark', t: 'table', by: 'Vendor', alsoBy: ['PIC'], val: true, section: S5, minRows: 1,
-    cols: reasonRows('delay-reasons', { reasonRequired: true }),
+    k: 'ot_delay_reason', l: 'Delay reason, remark and action plan', t: 'table', by: 'Vendor', alsoBy: ['PIC'], val: true, section: S5, minRows: 1,
+    cols: reasonRows('delay-reasons', { reasonRequired: true, actionPlan: true }),
     frules: [{ when: needsDelayReason, action: 'show' }, { when: needsDelayReason, action: 'makeMandatory' }]
   },
   // Stage 5 · Non-OT from the system: the vendor gives the reasons and a target OT date, the PIC accepts / rejects (loop).
   // A target beyond MRD needs the E-Doc deviation; one within MRD re-opens the Actual OT date once accepted.
   {
-    k: 'non_ot_reason_system', l: 'Non-OT reason and remark', t: 'table', by: 'Vendor', alsoBy: ['PIC'], val: true, req: true, section: S5N, vendor: true, minRows: 1,
-    cols: reasonRows('non-ot-reasons', { reasonRequired: true })
+    k: 'non_ot_reason_system', l: 'Non-OT reason, remark and action plan', t: 'table', by: 'Vendor', alsoBy: ['PIC'], val: true, req: true, section: S5N, vendor: true, minRows: 1,
+    cols: reasonRows('non-ot-reasons', { reasonRequired: true, actionPlan: true })
   },
   { k: 'non_ot_target_date', l: 'Target OT date', t: 'date', by: 'Vendor', val: true, req: true, section: S5N },
   // Stage 6 · PIC turns OT into Non-OT: one or more reasons (optional) with a remark each (mandatory). The vendor may
@@ -182,7 +186,7 @@ const PP9: PpFieldSpec[] = [
   // Stage 8 · Deviation (Non-OT beyond MRD): E-Doc number (searchable) and its approval status (fetched or picked).
   // MSIL only: the vendor never sees the E-Doc number or the deviation approval status.
   { k: 'e_doc_number', l: 'E-Doc number', t: 'text', by: 'PIC', section: S8, search: true },
-  { k: 'deviation_approval_status', l: 'Deviation approval status', t: 'dropdown', o: ['Approved', 'Pending', 'Rejected'], by: 'PIC', src: 'edoc', edocFrom: 'e_doc_number', section: S8, dash: true }
+  { k: 'deviation_approval_status', l: 'Deviation approval status', t: 'dropdown', o: ['Approved', 'Pending', 'Rejected'], by: 'PIC', section: S8, dash: true }
 ]
 
 export const PP9_CONFIG: PpActivityConfig = {
@@ -231,8 +235,8 @@ export const PP9_CONFIG: PpActivityConfig = {
     edocField: 'e_doc_number',
     statusField: 'deviation_approval_status',
     enteredBy: 'PIC',
-    // Approval status: fetched from E-Doc, or picked by the PIC. No PIC → SIC → DPM chain for OT.
-    fetchStatus: true,
+    // E-Doc number and approval status are both entered by the PIC (no E-Doc integration). No PIC → SIC → DPM chain for OT.
+    fetchStatus: false,
     manualStatus: true,
     approvalChain: false
   },
@@ -370,7 +374,7 @@ const MPP1: PpFieldSpec[] = [
   },
   { k: 'deviation_raised', l: 'Deviation raised', t: 'yesNo', by: 'PIC', section: O4 },
   { k: 'e_doc_number', l: 'E-Doc number', t: 'text', by: 'PIC', section: O4, search: true },
-  { k: 'deviation_approval_status', l: 'Deviation approval status', t: 'dropdown', o: ['Approved', 'Pending', 'Rejected'], by: 'PIC', src: 'edoc', edocFrom: 'e_doc_number', section: O4, dash: true },
+  { k: 'deviation_approval_status', l: 'Deviation approval status', t: 'dropdown', o: ['Approved', 'Pending', 'Rejected'], by: 'PIC', section: O4, dash: true },
   { k: 'machine_installation_date', l: 'Machine installation date', t: 'date', by: 'Vendor', val: true, section: O5 }
 ]
 
@@ -412,7 +416,7 @@ export const MPP1_CONFIG: PpActivityConfig = {
     edocField: 'e_doc_number',
     statusField: 'deviation_approval_status',
     enteredBy: 'PIC',
-    fetchStatus: true,
+    fetchStatus: false,
     manualStatus: true,
     approvalChain: false
   },

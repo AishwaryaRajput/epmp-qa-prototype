@@ -22,10 +22,12 @@ interface Props {
   notApplicable: boolean
   /** Bump this number to open the vendor pop-up (the form’s Submit does this when a reason is missing). */
   openRequest: number
+  /** Called after the vendor gives a reason in the pop-up that a Submit opened (the submit then carries on). */
+  onGiven?: () => void
 }
 
 /** Delay-reason card for the part form: vendor pop-up and status, PIC accept / send back. */
-export function DelayReasonBlock({ activity, row, partNo, partName, entry, plannedEnd, ryg, notApplicable, openRequest }: Props) {
+export function DelayReasonBlock({ activity, row, partNo, partName, entry, plannedEnd, ryg, notApplicable, openRequest, onGiven }: Props) {
   const { delayReasons, parts, picAssignments, submitDelayReasons, decideDelayReasons } = useQAStore()
   const { currentPersona } = usePersonaStore()
   const entryId = makeEntryId(row.id, partNo)
@@ -70,6 +72,7 @@ export function DelayReasonBlock({ activity, row, partNo, partName, entry, plann
       category, remark, revisedDate, by: currentPersona, actorName: FIXED_VENDOR_NAME
     })
     setDialog(false)
+    onGiven?.()
   }
 
   const tone =

@@ -7,6 +7,7 @@
  *   - A reviewer picks a decision per row; nothing moves until they press "Submit decisions" in the drawer footer.
  */
 import { Fragment, useMemo } from 'react'
+import { showDate } from './showDate'
 import type { FieldDefinition, TableColumn } from '../domain'
 import { cellEditable, columnStage, columnVisible, isRequired, matches, rowStage, type Row, type RowRule } from '../engine/rowReview'
 
@@ -169,6 +170,7 @@ export function ReviewTable({ field, value, onChange, disabled, currentPersona =
     }
     if (empty) return DASH
     if (c.type === 'dropdown') return <span className="inline-block px-2 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200 font-medium text-[11px]">{String(v)}</span>
+    if (c.type === 'date') return <span>{showDate(v)}</span>
     return <span>{String(v)}</span>
   }
 

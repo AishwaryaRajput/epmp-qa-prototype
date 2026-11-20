@@ -28,6 +28,8 @@ import { sapTier2Rows } from './index'
 import { sampleIntakeAttrs } from './partIntakeFields'
 import { seedReviewRows } from '../engine/rowReview'
 import { APP_TODAY } from '../domain/today'
+
+type ActivityRows = Extract<NonNullable<FieldDefinition['derivedRows']>, { from: 'activity' }>
 import { DEMO_ENTRY_PRESETS, DEMO_MILESTONE_MRDS, DEMO_MODEL_MRDS } from './demoPresets'
 
 const NOW = '2026-10-15T09:00:00Z'
@@ -232,14 +234,10 @@ export function buildDemoData(
         let values: Record<string, any> = {}
         def.fields.forEach((f, fi) => {
           if (f.dataOnly) {
-            // Data-only feeds (SAP / ENOVIA …) that other fields calculate from are stored on the part's entry. A part is
-            // missing from a given system now and then (blank), so calculations such as "ENOVIA, else SAP, else Data
-            // Pending Updating" show every case. Tables and counts stay with the dashboard feed (see ./feed).
+            // Data-only feeds (SAP / ENOVIA …) that other fields calculate from are stored on the part's entry. Every
+            // system field is filled (never blank). Tables and counts stay with the dashboard feed (see ./feed).
             if (f.type === 'table' || f.countRows || f.source === 'calculated') return
-            // Parts cycle through: in both systems / ENOVIA only / SAP only / in neither (fields fetched on open always have one).
-            const k = pi % 4
-            const inSystem = f.autoFetch ? true : f.source === 'enovia' ? k < 2 : f.source === 'sap' ? k === 0 || k === 2 : true
-            values[f.key] = inSystem ? sampleValue(f, pi * 3 + ri + fi, mrd, part.partNo) : ''
+            values[f.key] = sampleValue(f, pi * 3 + ri + fi, mrd, part.partNo)
             return
           }
           if (scenario === 3 && fi % 2 === 1) return // draft = half filled
@@ -396,16 +394,16 @@ export function buildDemoData(
   for (const def of activities) {
     const pulls = def.fields.filter((f) => f.derivedRows?.from === 'activity' || f.pullFrom)
     if (!pulls.length) continue
-    const srcIds = [...new Set(pulls.map((f) => (f.pullFrom ? f.pullFrom.activityId : f.derivedRows!.activityId!)))]
+    const srcIds = [...new Set(pulls.map((f) => (f.pullFrom ? f.pullFrom.activityId : (f.derivedRows as ActivityRows).activityId)))]
     for (let i = entries.length - 1; i >= 0; i--) {
       const e = entries[i]
       if (e.activityId !== def.id) continue
       const srcs = entries.filter((x) => srcIds.includes(x.activityId) && x.partNo === e.partNo)
       const ready = srcIds.every((id) => srcs.some((x) => x.activityId === id && x.validationState === 'Approved'))
       const consistent = pulls.every((f) => {
-        const src = srcs.find((x) => x.activityId === (f.pullFrom ? f.pullFrom.activityId : f.derivedRows!.activityId))?.values
+        const src = srcs.find((x) => x.activityId === (f.pullFrom ? f.pullFrom.activityId : (f.derivedRows as ActivityRows).activityId))?.values
         if (f.pullFrom) return JSON.stringify(src?.[f.pullFrom.fieldKey] ?? null) === JSON.stringify(e.values[f.key] ?? null)
-        const want = pulledTableRows(f, activities, src?.[f.derivedRows!.fieldKey]).rows
+        const want = pulledTableRows(f, activities, src?.[(f.derivedRows as ActivityRows).fieldKey]).rows
         const have: Record<string, any>[] = Array.isArray(e.values[f.key]) ? e.values[f.key] : []
         return want.length === have.length && want.every((w, j) => Object.entries(w).every(([k, v]) => String(have[j]?.[k] ?? '') === String(v ?? '')))
       })

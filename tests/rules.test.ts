@@ -157,13 +157,14 @@ t('delay reason: shown + mandatory for a slip within MRD (actual > plan, or plan
   assert.equal(run({ ot_planned_date: '2026-12-10' }).states.ot_delay_reason.visible, false)
   assert.equal(run({ ...base, actual_ot_date: '2026-11-05' }).states.ot_delay_reason.visible, false)
 })
-t('delay reasons: rows of reason + remark (both required per row); editable by Vendor and PIC', () => {
+t('delay reasons: rows of reason + remark + action plan (all required per row); editable by Vendor and PIC', () => {
   const f = fieldOf('ot_delay_reason')
   assert.equal(f.type, 'table')
   assert.ok(fieldMissing(f, []))
-  assert.ok(fieldMissing(f, [{ reason: 'ECN case' }])!.includes('Remark'))
-  assert.ok(fieldMissing(f, [{ remark: 'x' }])!.includes('Reason'))
-  assert.equal(fieldMissing(f, [{ reason: 'ECN case', remark: 'ECN 123 changed the tool' }, { reason: 'Tool maturation delay', remark: 'Second trial' }]), null)
+  assert.ok(fieldMissing(f, [{ reason: 'ECN case', action_plan: 'a' }])!.includes('Remark'))
+  assert.ok(fieldMissing(f, [{ remark: 'x', action_plan: 'a' }])!.includes('Reason'))
+  assert.ok(fieldMissing(f, [{ reason: 'ECN case', remark: 'x' }])!.includes('Action plan'))
+  assert.equal(fieldMissing(f, [{ reason: 'ECN case', remark: 'ECN 123 changed the tool', action_plan: 'New tool' }, { reason: 'Tool maturation delay', remark: 'Second trial', action_plan: 'Trial 3' }]), null)
   assert.equal(f.columns!.find((c) => c.key === 'reason')!.optionsFrom, 'delay-reasons')
   for (const k of ['ot_delay_reason', 'non_ot_reason_system', 'action_plan_remark']) {
     const g = fieldOf(k)
@@ -178,8 +179,9 @@ t('system Non-OT: reason rows + target OT date shown and mandatory (the loop can
   }
   const f = fieldOf('non_ot_reason_system')
   assert.ok(fieldMissing(f, undefined))
-  assert.ok(fieldMissing(f, [{ reason: 'Tool maturation delay' }])!.includes('Remark'))
-  assert.equal(fieldMissing(f, [{ reason: 'Tool maturation delay', remark: 'Re-trial' }]), null)
+  assert.ok(fieldMissing(f, [{ reason: 'Tool maturation delay', action_plan: 'a' }])!.includes('Remark'))
+  assert.ok(fieldMissing(f, [{ reason: 'Tool maturation delay', remark: 'Re-trial' }])!.includes('Action plan'))
+  assert.equal(fieldMissing(f, [{ reason: 'Tool maturation delay', remark: 'Re-trial', action_plan: 'Trial 3' }]), null)
   assert.equal(run(base).states.non_ot_reason_system.visible, false)
 })
 t('Non-OT target date decides the deviation: within MRD no E-Doc, beyond MRD E-Doc + status', () => {
@@ -317,7 +319,7 @@ t('partial review: the Vendor changing the PIC reasons goes to the PIC alone; a 
   assert.deepEqual(d.restore, { pic_non_ot_reasons: before })
   assert.equal(d.state.status, 'accepted')
 })
-t('deviation: E-Doc + approval status (fetched or picked) only for Non-OT beyond MRD; no approval chain for pp-9', () => {
+t('deviation: E-Doc + approval status (both entered by the PIC) only for Non-OT beyond MRD; no approval chain for pp-9', () => {
   assert.equal(run({ ...base, actual_ot_date: '2026-11-20' }).deviation, false)
   const r = run({ ...base, actual_ot_date: '2026-12-05' }, '2026-12-31')
   assert.equal(r.deviation, true)
@@ -325,8 +327,10 @@ t('deviation: E-Doc + approval status (fetched or picked) only for Non-OT beyond
   assert.equal(r.states.e_doc_number.mandatory, true)
   assert.equal(r.states.deviation_approval_status.visible, true)
   assert.deepEqual(fieldOf('deviation_approval_status').options, ['Approved', 'Pending', 'Rejected'])
-  assert.equal(pp9.deviation!.fetchStatus, true)
+  assert.equal(pp9.deviation!.fetchStatus, false)
   assert.equal(pp9.deviation!.manualStatus, true)
+  assert.equal(fieldOf('deviation_approval_status').enteredBy, 'PIC')
+  assert.equal(fieldOf('deviation_approval_status').source, 'manual')
   assert.equal(pp9.deviation!.approvalChain, false)
   assert.equal(pp9.deviation!.enteredBy, 'PIC')
   assert.equal(fieldOf('e_doc_number').searchable, true)
@@ -371,7 +375,7 @@ t('plain text reason + remark is read safely (never one key per character)', () 
   assert.ok(fieldMissing({ ...fieldOf('ot_delay_reason'), type: 'reasonRemark', reasonRemark: { listId: 'delay-reasons', remark: 'always' } }, 'Supplier late')!.includes('reason'))
 })
 t('STORE_VERSION migration: new pp-9 definition, strings → reason+remark, old status words, lists replaced', () => {
-  assert.equal(STORE_VERSION, 63)
+  assert.equal(STORE_VERSION, 64)
   const oldPp9 = { ...pp9, delayPopup: undefined, fields: pp9.fields.map((f) => (f.key === 'tool_cutting_status' ? { ...f, options: ['Not Started', 'Started', 'Completed'] } : f)) }
   const persisted = {
     activities: [oldPp9],
@@ -824,7 +828,7 @@ t('math and match % calculations; part attribute paths', () => {
 t('OT: the system Non-OT loop goes with the vendor\'s form Submit (no extra click); one reason row is enough', () => {
   const pp9 = PP_ACTIVITIES.find((a) => a.id === 'pp-9')!
   const extra = ruleExtra(pp9, undefined, { mrd: '2026-12-01', today: '2026-11-30' })
-  const v = { ot_planned_date: '2026-12-10', non_ot_reason_system: [{ reason: 'Tool maturation delay', remark: 'b' }, {}], non_ot_target_date: '2026-12-15' }
+  const v = { ot_planned_date: '2026-12-10', non_ot_reason_system: [{ reason: 'Tool maturation delay', remark: 'b', action_plan: 'c' }, {}], non_ot_target_date: '2026-12-15' }
   const vals = evaluateAll(pp9, v, extra).values
   assert.deepEqual(loopsSentWithForm(pp9, vals, extra, 'Vendor').map((g) => g.id), ['system-non-ot'])
   assert.equal(loopsSentWithForm(pp9, vals, extra, 'PIC').length, 0)
@@ -970,6 +974,9 @@ t('Part inspection: re-verification NG repeats the NG loop as a new cycle; the c
   assert.equal(r.values.ng_rows, undefined)
   assert.equal(r.values.reverification_status, undefined)
   assert.equal(r.values.inspection_status, 'NG')
+  // Sending the new cycle's rows keeps the closed cycle.
+  const { groupSubmit } = await import('../src/engine')
+  assert.equal(groupSubmit(r.state, { ng_rows: rows }, 'Vendor', 'x').cycles!.length, 1)
   // The new cycle needs NG details again; a second NG closes cycle 2.
   const again = groupRepeat(pi, g, { ...r.state, status: 'accepted' }, { ...r.values, ng_rows: rows, reverification_status: 'NG' }, 'PIC', 'later')
   assert.deepEqual(again.state.cycles!.map((c) => c.cycle), [1, 2])
@@ -1037,6 +1044,26 @@ t('v63 migration: an old stored SOR definition is replaced; old point columns ma
   assert.equal(p[1].pic_decision, 'Send back')
   assert.equal(p[1].pic_remark, 'fix')
   assert.equal('pic_reject_remark' in p[1], false)
+})
+
+t('E-Doc: no system integration — every E-Doc field on a form is entered by the PIC; approval status Approved / Pending / Rejected', () => {
+  for (const a of SEED_ACTIVITIES) {
+    if (a.deviation) assert.equal(a.deviation.fetchStatus, false, `${a.id} deviation fetch`)
+    for (const f of a.fields) {
+      if (f.dataOnly) continue
+      assert.notEqual(f.source, 'edoc', `${a.id} ${f.key}`)
+      if (/approval_status|deviation_status/.test(f.key) && f.type === 'dropdown') {
+        assert.deepEqual(f.options, ['Approved', 'Pending', 'Rejected'], `${a.id} ${f.key}`)
+        assert.equal(f.enteredBy, 'PIC', `${a.id} ${f.key}`)
+      }
+    }
+  }
+  const old = { id: 'mpp-10x', name: 'x', fields: [{ key: 'deviation_approval_status', label: 's', type: 'dropdown', options: ['Approved', 'Rejected', 'Pending', 'In progress'], enteredBy: 'System', source: 'edoc' }] } as any
+  const e = { id: 'e', templateRowId: 'r', activityId: 'mpp-10x', partNo: 'P', values: { deviation_approval_status: 'In progress' }, validationState: 'Draft', history: [], currentStepIndex: 0, updatedAt: '', updatedBy: '' } as any
+  const out = migrateStore({ activities: [old], entries: [e], masterLists: SEED_MASTER_LISTS }, 63, { activities: PP_ACTIVITIES, masterLists: SEED_MASTER_LISTS })
+  const f = out.activities[0].fields[0]
+  assert.equal(f.enteredBy, 'PIC'); assert.equal(f.source, 'manual'); assert.deepEqual(f.options, ['Approved', 'Pending', 'Rejected'])
+  assert.equal(out.entries[0].values.deviation_approval_status, 'Pending')
 })
 
 async function main() {

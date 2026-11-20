@@ -1,3 +1,4 @@
+import { showDate } from './showDate'
 import { Icon as FbIcon } from './Icon'
 /**
  * Field Renderer Registry
@@ -160,7 +161,7 @@ export const fieldRendererRegistry: Record<string, FieldRendererEntry> = {
   date: {
     preview: ({ field, value }) => (
       <FieldWrapper label={field.label}>
-        <PreviewValue value={value} />
+        <PreviewValue value={showDate(value)} />
       </FieldWrapper>
     ),
     editor: ({ field, value, onChange, disabled }) => (

@@ -75,7 +75,7 @@ export function DeviationPopup({
     if (askRaised && raised === 'N') { onEdocSave('', undefined, 'N'); return }
     if (!edocNumber.trim()) { setError('Please enter an E-Doc number.'); return }
     if (manualOn) {
-      if (!manual && !result?.deviationStatus) { setError('Choose the E-Doc approval status.'); return }
+      if (!manual && !result?.deviationStatus) { setError('Choose the deviation approval status.'); return }
       onEdocSave(edocNumber.trim(), manual || result?.deviationStatus, r)
       return
     }
@@ -133,7 +133,7 @@ export function DeviationPopup({
         {/* E-Doc number input */}
         {needEdoc && <div>
           <label className="text-xs font-medium text-[var(--color-muted)] block mb-1">
-            E-Doc tracking number
+            E-Doc number
           </label>
           <div className="flex gap-2">
             <input
@@ -155,7 +155,7 @@ export function DeviationPopup({
         </div>}
         {needEdoc && manualOn && (
           <div>
-            <label className="text-xs font-medium text-[var(--color-muted)] block mb-1" htmlFor="dev-status">E-Doc approval status</label>
+            <label className="text-xs font-medium text-[var(--color-muted)] block mb-1" htmlFor="dev-status">Deviation approval status</label>
             <select id="dev-status" value={manual} onChange={(e) => { setManual(e.target.value); setError(null) }}
               className="w-56 border border-[var(--color-border)] rounded px-2 py-1.5 text-sm">
               <option value="">Select…</option>

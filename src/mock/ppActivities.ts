@@ -14,7 +14,20 @@ import { EPMP_ACTIVITIES } from './epmpFields'
 import { EXTRA_ACTIVITIES } from './sorAdherence'
 import { ACTIVITY_RULE_OVERLAY, DELAY_REASON_FIELD_KEYS, FIELD_CONFIG_OVERLAY, LATE_FIELD_VALUES, INSIGHT_FIELDS } from './ppRuleConfig'
 
-function toField(s: PpFieldSpec): FieldDefinition {
+/**
+ * E-Doc: no system integration. The PIC enters the E-Doc number and picks the deviation approval status
+ * (Approved / Pending / Rejected) — for every activity, including those built straight from the field sheet.
+ */
+export const DEVIATION_STATUS_OPTIONS = ['Approved', 'Pending', 'Rejected']
+const isApprovalStatus = (s: PpFieldSpec) => (s.t ?? 'text') === 'dropdown' && /approval_status|deviation_status/.test(s.k)
+const manualEdoc = (s: PpFieldSpec): PpFieldSpec =>
+  s.dataOnly ? s
+    : isApprovalStatus(s) && (s.src === 'edoc' || s.edocFrom) ? { ...s, by: 'PIC', src: 'manual', o: DEVIATION_STATUS_OPTIONS, edocFrom: undefined }
+      : s.src === 'edoc' ? { ...s, by: 'PIC', src: 'manual', edocFrom: undefined, ...(/e_doc_number/.test(s.k) ? { t: 'text' as const } : {}) }
+        : s
+
+function toField(s0: PpFieldSpec): FieldDefinition {
+  const s = manualEdoc(s0)
   return {
     key: s.k,
     label: s.l,

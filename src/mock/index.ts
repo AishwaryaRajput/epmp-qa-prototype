@@ -174,14 +174,11 @@ const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 /**
  * Mock Service Fetchers:
- * Simulates calling external integrations with a 500ms network delay.
- * Includes a 15% probability of a simulated "Integration not available" state.
+ * Simulates calling external integrations with a 500ms network delay. Every fetched attribute comes back filled
+ * (no simulated outages, no blank values), so fields pulled from a system are never left empty.
  */
 export async function fetchFromEnovia(partNo: string): Promise<{ success: boolean; data?: any; error?: string }> {
   await delay(500)
-  if (Math.random() < 0.15) {
-    return { success: false, error: 'ENOVIA integration service is currently not available.' }
-  }
 
   // Mock attributes, stable per part number (the part master lives in the store, so nothing is looked up here).
   const h = Array.from(partNo).reduce((n, c) => n + c.charCodeAt(0), 0)
@@ -195,8 +192,14 @@ export async function fetchFromEnovia(partNo: string): Promise<{ success: boolea
       lastUpdated: new Date().toISOString(),
       // Keys are matched to activity fields by name, ignoring underscores (see PartDetailDrawer).
       targetDateProprietary: day(9),
-      techMeetingStatus: yn(['Y', 'N', 'Y', '']),
-      processMeeting: yn(['N', 'Y', 'Y', '']),
+      techMeetingStatus: yn(['Y', 'N', 'Y', 'Y']),
+      processMeeting: yn(['N', 'Y', 'Y', 'Y']),
+      specMeetingNotApplicable: false,
+      dataUpdatePending: false,
+      auditPlannedDate: day(6),
+      auditActualDate: day(8),
+      auditCompletedPending: ['Completed', 'Pending'][h % 2],
+      auditStatus: ['OK', 'NG'][(h + 1) % 2],
       enoviaSpecMeetingStatus: ['Initiated', 'Pending', 'Approved'][h % 3],
       plannedStartDate: day(2),
       enoviaActualEndDate: day(16),
@@ -229,14 +232,6 @@ export function sapTier2Rows(partNo: string): Record<string, any>[] {
 }
 export async function fetchFromSap(partNo: string): Promise<{ success: boolean; data?: any; error?: string }> {
   await delay(500)
-  if (Math.random() < 0.15) {
-    return { success: false, error: 'SAP network socket timed out.' }
-  }
-
-  const part = MOCK_PART_LIST.find((p) => p.partNo === partNo)
-  if (!part) {
-    return { success: false, error: `Part ${partNo} not found in SAP inventory.` }
-  }
 
   // Mock attributes, stable per part number. Keys are matched to activity fields by name (see PartDetailDrawer).
   const h = Array.from(partNo).reduce((n, c) => n + c.charCodeAt(0), 0)
@@ -261,16 +256,26 @@ export async function fetchFromSap(partNo: string): Promise<{ success: boolean; 
       sheetMetalApplicability: h % 3 === 0 ? 'Y' : 'N',
       totalParameters: 10 + (h % 15),
       inspectionActualDate: day(10),
-      evidenceAttachment: h % 2 === 0 ? 'Y' : 'N'
+      inspectionCompleted: ['Y', 'N', 'Y'][h % 3],
+      evidenceAttachment: h % 2 === 0 ? 'Y' : 'N',
+      tier2SupplierCode: 7000 + (h % 900),
+      tier2SupplierName: `Tier-2 Supplier ${String.fromCharCode(65 + (h % 20))}`,
+      ifTier2StatusIsBlank: 'New (Unaudited)',
+      ppapStatus: ['Approved', 'Pending'][h % 2],
+      pendingAt: ['PIC', 'SIC', 'DPM', 'DDVM', 'DVM', 'DVM-SMC'][h % 6],
+      ifmCheckSheetStatus: ['Submitted by vendor', 'Approved by MSIL'][h % 2],
+      applicabilityAArAArF: 'Y',
+      uploadedInSapSmir: ['Y', 'N', 'Y'][h % 3],
+      ppvtMsilScopeVolume: 100 + (h % 400),
+      ppvtMsilScopeStatus: ['OK', 'NG'][h % 2],
+      ppvtMsilScopePlannedDateActualDate: `${day(5)} / ${day(12)}`,
+      specMeetingTimeliness: ['On time', 'Delayed'][h % 2]
     }
   }
 }
 
 export async function fetchFromEdoc(docNo: string): Promise<{ success: boolean; data?: any; error?: string }> {
   await delay(500)
-  if (Math.random() < 0.15) {
-    return { success: false, error: 'E-Doc repository is undergoing scheduled maintenance.' }
-  }
 
   if (!docNo || docNo.trim() === '') {
     return { success: false, error: 'E-Doc tracking number cannot be empty.' }
@@ -295,19 +300,12 @@ export async function fetchFromEdoc(docNo: string): Promise<{ success: boolean; 
 
 export async function fetchFromRegApp(partNo: string): Promise<{ success: boolean; data?: any; error?: string }> {
   await delay(500)
-  if (Math.random() < 0.15) {
-    return { success: false, error: 'Regulatory App API endpoint is offline.' }
-  }
-
-  const part = MOCK_PART_LIST.find((p) => p.partNo === partNo)
-  if (!part) {
-    return { success: false, error: `Part ${partNo} not found in Regulatory register.` }
-  }
 
   return {
     success: true,
     data: {
-      certNo: `REG-CERT-${part.partNo}-2026`,
+      uploadedInRegulatoryApp: 'Y',
+      certNo: `REG-CERT-${partNo}-2026`,
       status: 'Approved',
       validUntil: '2029-12-31',
       homologationRequired: true

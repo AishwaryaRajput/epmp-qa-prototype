@@ -78,6 +78,15 @@ function isFetchedSource(source: string): boolean {
   return ['enovia', 'sap', 'edoc', 'regapp'].includes(source)
 }
 
+/** Store values changed under an open form: take them, except the fields this person edited since (their own edits stay). */
+function followStore(before: Record<string, any>, next: Record<string, any>, local: Record<string, any>): Record<string, any> {
+  const out = { ...next }
+  for (const k of Object.keys(local)) {
+    if (JSON.stringify(local[k] ?? null) !== JSON.stringify(before[k] ?? null)) out[k] = local[k]
+  }
+  return out
+}
+
 export function PartDetailDrawer({ activity, row, partNo, onClose }: PartDetailDrawerProps) {
   const { entries, activities, models, picAssignments, parts, partReleases, partAcks, delayReasons, saveChecked, submitGroup, transitionEntryState, markEntryNg, logAudit, documents, setNotApplicable, releasePart, setVendorTimeline, addAction, updateAction, deleteAction, addDeviation, advanceDeviation, masterLists, raiseConfiguredDeviation } = useQAStore()
   const { currentPersona } = usePersonaStore()
@@ -94,13 +103,23 @@ export function PartDetailDrawer({ activity, row, partNo, onClose }: PartDetailD
   const dates = resolveTrackedDates(row, model, entry, activity, part)
 
   const [localValues, setLocalValues] = useState<Record<string, any>>(entry?.values ?? {})
-  // A review loop that starts a new cycle (GroupReview.repeat) empties its fields in the store: the open form follows,
-  // so a later save cannot write the closed cycle's values back.
-  const cycleCount = Object.values(entry?.groupReviews ?? {}).reduce((n, s) => n + (s.cycles?.length ?? 0), 0)
-  const [seenCycles, setSeenCycles] = useState(cycleCount)
-  if (cycleCount !== seenCycles) {
-    setSeenCycles(cycleCount)
-    setLocalValues(entry?.values ?? {})
+  // The open form always follows the stored record: when it changes (another role's decision, a loop that clears or
+  // reopens fields, a new cycle, a send-back), every field this person has not edited takes the stored value; their own
+  // unsaved edits stay. After their own save, or a switch of role, the form takes the stored values in full — so a
+  // later save can never write old values back, and every role sees the current state.
+  const storeValues = entry?.values
+  const [baseValues, setBaseValues] = useState(storeValues)
+  const [adoptNext, setAdoptNext] = useState(false)
+  const [seenPersona, setSeenPersona] = useState(currentPersona)
+  if (currentPersona !== seenPersona) {
+    setSeenPersona(currentPersona)
+    setBaseValues(storeValues)
+    setLocalValues(storeValues ?? {})
+  } else if (storeValues !== baseValues) {
+    const before = baseValues ?? {}
+    setBaseValues(storeValues)
+    setAdoptNext(false)
+    setLocalValues((local) => (adoptNext ? (storeValues ?? {}) : followStore(before, storeValues ?? {}, local)))
   }
   const [fetchState, setFetchState] = useState<Record<string, FetchEntry>>({})
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
@@ -115,6 +134,8 @@ export function PartDetailDrawer({ activity, row, partNo, onClose }: PartDetailD
   const [naDialog, setNaDialog] = useState<'mark' | 'reverse' | null>(null)
   const [releaseComment, setReleaseComment] = useState('')
   const [delayOpenReq, setDelayOpenReq] = useState(0)
+  const submitAfterReason = useRef(false)
+  const doSubmitRef = useRef<() => void>(() => {})
   const [tlStart, setTlStart] = useState('')
   const [tlEnd, setTlEnd] = useState('')
   const [tlEditing, setTlEditing] = useState(false)
@@ -281,7 +302,7 @@ export function PartDetailDrawer({ activity, row, partNo, onClose }: PartDetailD
       const dataKeys = Object.keys(result.data)
       // Match a returned attribute to the field by name, ignoring underscores (target_date_proprietary ~ targetDateProprietary).
       const flat = field.key.toLowerCase().replace(/_/g, '')
-      const matched = dataKeys.find((k) => k.toLowerCase() === field.key.toLowerCase() || flat.includes(k.toLowerCase()))
+      const matched = dataKeys.find((k) => k.toLowerCase() === flat) ?? dataKeys.find((k) => flat.includes(k.toLowerCase()))
       const fetchedValue = field.source === 'edoc'
         ? edocStatusToOption(result.data.deviationStatus, field.options)
         : matched ? result.data[matched] : result.data[dataKeys[0]]
@@ -314,6 +335,8 @@ export function PartDetailDrawer({ activity, row, partNo, onClose }: PartDetailD
   function persist(values: Record<string, any>): boolean {
     const issues = saveChecked(row.id, partNo, values, currentPersona)
     setStoreIssues(issues.map((i) => i.message))
+    // Saved: the form takes what the store now holds (calculations, cleared fields, a new cycle).
+    if (issues.length === 0) setAdoptNext(true)
     return issues.length === 0
   }
 
@@ -379,9 +402,14 @@ export function PartDetailDrawer({ activity, row, partNo, onClose }: PartDetailD
     currentPersona === 'Vendor' && !isResubmission(entry) && vendorHoldsDelay(activity, entry, String(rygNow), naNow) && needsVendorReason(delayStateOf(entryId, delayReasons).state)
   function handleSubmit() {
     if (vendorMustGiveReason) {
+      // The reason pop-up comes first; once the reason is given the submit carries on (no second click).
+      submitAfterReason.current = true
       setDelayOpenReq((n) => n + 1)
       return
     }
+    doSubmit()
+  }
+  function doSubmit() {
     if (submitBlockReason) return
     if (!validateForm()) return
     const finalValues = startReview(activity, localValues)
@@ -389,6 +417,10 @@ export function PartDetailDrawer({ activity, row, partNo, onClose }: PartDetailD
     sendLoopsWithForm()
     transitionEntryState(entryId, 'Submit', undefined, currentPersona)
   }
+  // The latest submit (fresh values and state) for the delay pop-up to call once the reason is given.
+  useEffect(() => {
+    doSubmitRef.current = doSubmit
+  })
 
   // Row-review activities (PP-03): decisions are taken per point, never on the whole part.
   const reviewField = reviewFields(activity)[0]
@@ -794,6 +826,11 @@ export function PartDetailDrawer({ activity, row, partNo, onClose }: PartDetailD
           <DelayReasonBlock
             activity={activity} row={row} partNo={partNo} partName={part?.partName ?? partNo} entry={entry}
             plannedEnd={plannedEnd} ryg={String(rygNow)} notApplicable={naNow} openRequest={delayOpenReq}
+            onGiven={() => {
+              if (!submitAfterReason.current) return
+              submitAfterReason.current = false
+              setTimeout(() => doSubmitRef.current(), 0)
+            }}
           />
           {/* Planned timeline (template vs vendor-set) */}
           {vtAllowed && (
@@ -1294,7 +1331,13 @@ export function PartDetailDrawer({ activity, row, partNo, onClose }: PartDetailD
 
           {!canVendorEdit && !canPicEnter && !isNa && ((!rowReviewActive && visibleFields.some((f) => canEditField(f, currentPersona, entry, conditionalState[f.key], inGroupKeys.has(f.key)))) || fillAfterAcceptOpen(activity, localValues, currentPersona) || (rowReviewActive && entryCellsOpen(activity, localValues, currentPersona, entry?.validationState)) || (rowReviewActive && visibleFields.some((f) => f.type !== 'table' && canEditField(f, currentPersona, entry, conditionalState[f.key], inGroupKeys.has(f.key))))) && (
             <div className="mb-2">
-              <Button variant="secondary" size="sm" onClick={handleSave}>Save changes</Button>
+              {/* A correction that goes back for review (a rejected or open loop this role fills) is a resubmission. */}
+              {(() => {
+                const resend = loopsSentWithForm(activity, calculatedValues, extra, currentPersona)
+                return resend.length > 0
+                  ? <Button variant="primary" size="sm" onClick={handleSave}>Submit to {resend[0].reviewerRole}</Button>
+                  : <Button variant="secondary" size="sm" onClick={handleSave}>Save changes</Button>
+              })()}
             </div>
           )}
           {(showMarkNa || showReverseNa) && (
