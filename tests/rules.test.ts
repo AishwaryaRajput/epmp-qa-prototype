@@ -375,7 +375,7 @@ t('plain text reason + remark is read safely (never one key per character)', () 
   assert.ok(fieldMissing({ ...fieldOf('ot_delay_reason'), type: 'reasonRemark', reasonRemark: { listId: 'delay-reasons', remark: 'always' } }, 'Supplier late')!.includes('reason'))
 })
 t('STORE_VERSION migration: new pp-9 definition, strings → reason+remark, old status words, lists replaced', () => {
-  assert.equal(STORE_VERSION, 64)
+  assert.equal(STORE_VERSION, 65)
   const oldPp9 = { ...pp9, delayPopup: undefined, fields: pp9.fields.map((f) => (f.key === 'tool_cutting_status' ? { ...f, options: ['Not Started', 'Started', 'Completed'] } : f)) }
   const persisted = {
     activities: [oldPp9],
@@ -673,22 +673,22 @@ t('Stage 2: the Vendor\'s self PPVT is ONE record shown as a form (no rows to ad
   assert.ok(!ppvt.fields.some((x) => x.key === 'ppvt_ng_category'))
   assert.ok(!ppvt.fields.find((x) => x.key === 'reverification_cycles')!.columns!.some((c) => c.key === 'quality_cm_category'))
 })
-t('Stage 5: blind check — the Vendor table is hidden from the PIC until the PIC completes; the MSIL table from the Vendor until then', () => {
+t('Stage 5: blind check — the Vendor table is hidden from the PIC until the PIC completes; the MSIL table is never shown to the Vendor', () => {
   const during = pv({ msil_scope: 'MSIL scope', ppvt_self: [{ volume: 675, result: 'OK' }] }).states
   assert.deepEqual(during.ppvt_self.hiddenFor, ['PIC'])
   assert.deepEqual(during.ppvt_msil.hiddenFor, ['Vendor'])
   assert.equal(during.vendor_vs_pic.visible, false)
-  const after = pv({ msil_scope: 'MSIL scope', ppvt_self: [{ volume: 675, result: 'OK' }], ppvt_msil: [{ volume: 675, result: 'OK' }], pic_verification_done: 'Y' }).states
+  const after = pv({ msil_scope: 'MSIL scope', ppvt_self: [{ volume: 675, result: 'OK' }], ppvt_msil: [{ volume: 675, result: 'OK', verification_done: 'Y' }] }).states
   assert.equal(after.ppvt_self.hiddenFor, undefined)
-  assert.equal(after.ppvt_msil.hiddenFor, undefined)
+  assert.deepEqual(after.ppvt_msil.hiddenFor, ['Vendor'])
   assert.equal(after.vendor_vs_pic.visible, true)
   assert.equal(pv({ msil_scope: 'Vendor scope', ppvt_self: [{ volume: 675 }] }).states.ppvt_self.hiddenFor, undefined)
   for (const k of ['vendor_vs_pic', 'vendor_accuracy', 'final_ppvt_result']) assert.deepEqual(ppvt.fields.find((f) => f.key === k)!.hiddenFrom!.roles, ['Vendor'], k)
-  // MSIL table: the PIC fills the check columns, the Vendor the target dates and action plans (after the check)
+  // MSIL table: all the PIC's (the action plans and target dates stay the Vendor's, in the Vendor's PPVT)
   const m = ppvt.fields.find((x) => x.key === 'ppvt_msil')!
-  const by = Object.fromEntries(m.columns!.map((c) => [c.key, c.enteredBy]))
-  assert.equal(by.volume, 'PIC'); assert.equal(by.result, 'PIC'); assert.equal(by.rejection_pct, 'PIC')
-  assert.equal(by.target_date, 'Vendor'); assert.equal(by.capacity_action_plan, 'Vendor'); assert.equal(by.quality_target_date, 'Vendor')
+  assert.equal(m.enteredBy, 'PIC')
+  assert.ok(m.columns!.every((c) => !c.enteredBy || c.enteredBy === 'PIC' || c.enteredBy === 'System'))
+  assert.equal(m.alsoEditableBy, undefined)
 })
 t('Stage 6: re-verification columns follow the final NG type (row rules); vendor dates editable after submit', () => {
   const f = ppvt.fields.find((x) => x.key === 'reverification_cycles')!
@@ -703,9 +703,11 @@ t('Stage 6: re-verification columns follow the final NG type (row rules); vendor
   assert.deepEqual(col('requirement').options, ['Re-PPVT', 'Countermeasure Verification', 'OK As It Is'])
   for (const k of ['capacity_cm_category', 'capacity_impl_date', 'target_date_if_pending', 'final_closure_date']) assert.equal(rule(col(k).showRule!, { requirement: 'OK As It Is' }), false, k)
   assert.equal(rule(col('target_date_if_pending').showRule!, { requirement: 'Re-PPVT' }), true)
-  // shared by PIC and Vendor: both pick the action, write the status and add a cycle
-  assert.equal(col('requirement').enteredBy, undefined)
-  assert.deepEqual(f.addRowsBy, ['PIC', 'Vendor'])
+  // The PIC picks the requirement and writes the status; a new cycle starts by itself when a cycle is closed as Open
+  assert.equal(col('requirement').enteredBy, 'PIC')
+  assert.equal(col('current_status').enteredBy, 'PIC')
+  assert.equal(f.addRowsBy, undefined)
+  assert.ok(f.nextRow && f.lockEarlierRows)
   assert.deepEqual(f.alsoEditableBy, ['Vendor'])
   const s = pv({ ppvt_self: [{ result: 'NG', ng_type: 'Capacity' }] }).states.reverification_cycles
   assert.equal(s.reopened, true)
@@ -1064,6 +1066,48 @@ t('E-Doc: no system integration — every E-Doc field on a form is entered by th
   const f = out.activities[0].fields[0]
   assert.equal(f.enteredBy, 'PIC'); assert.equal(f.source, 'manual'); assert.deepEqual(f.options, ['Approved', 'Pending', 'Rejected'])
   assert.equal(out.entries[0].values.deviation_approval_status, 'Pending')
+})
+
+t('PPVT: exactly the 7-stage flow — no fields outside it; Vendor never sees the PIC values; PIC owns requirement / status / categories / Open-Closed', () => {
+  const pv = PP_ACTIVITIES.find((a) => a.id === 'sop-15')!
+  const cols = (k: string) => pv.fields.find((f) => f.key === k)!.columns!.map((c) => c.key)
+  assert.deepEqual(cols('ppvt_self'), ['volume', 'target_date', 'result', 'ng_remark', 'ng_type', 'capacity_issue', 'capacity_observed', 'shortage', 'capacity_action_plan', 'capacity_target_date', 'quality_issue', 'quality_action_plan', 'rejection_pct', 'quality_target_date'])
+  assert.deepEqual(cols('ppvt_msil'), ['volume', 'result', 'ng_type', 'capacity_issue', 'capacity_observed', 'shortage', 'quality_issue', 'rejection_pct', 'verification_done'])
+  const cyc = pv.fields.find((f) => f.key === 'reverification_cycles')!
+  assert.ok(!cyc.columns!.some((c) => /broad|ng_category/.test(c.key)))
+  for (const k of ['requirement', 'current_status', 'capacity_cm_category', 'quality_concern_category', 'case_status']) assert.equal(cyc.columns!.find((c) => c.key === k)!.enteredBy, 'PIC', k)
+  for (const k of ['capacity_impl_date', 'quality_impl_date', 'target_date_if_pending', 'final_closure_date']) assert.equal(cyc.columns!.find((c) => c.key === k)!.enteredBy, 'Vendor', k)
+  for (const k of ['ppvt_msil', 'vendor_vs_pic', 'vendor_accuracy', 'final_ppvt_result']) {
+    const h = pv.fields.find((f) => f.key === k)!.hiddenFrom!
+    assert.ok(h.roles.includes('Vendor') && !h.when, `${k} never shown to the Vendor`)
+  }
+  assert.ok(!pv.fields.some((f) => f.key === 'pic_verification_done'))
+})
+
+t('PPVT stage 7: Open starts the next cycle; Re-PPVT + Open also starts a fresh PPVT entry (and the PIC check for MSIL scope) and sends the form back; Closed starts nothing', async () => {
+  const { rowsToStart } = await import('../src/engine')
+  const pv = PP_ACTIVITIES.find((a) => a.id === 'sop-15')!
+  const extra = ruleExtra2(pv, undefined)
+  const base = { ppvt_self: [{ volume: 675, target_date: '2026-11-20', result: 'NG', ng_type: 'Quality' }] }
+  const keys = (v: any) => rowsToStart(pv, v, extra).map((f) => f.key).sort()
+  assert.deepEqual(keys({ ...base, reverification_cycles: [{ requirement: 'Countermeasure Verification', case_status: 'Open' }] }), ['reverification_cycles'])
+  assert.deepEqual(keys({ ...base, reverification_cycles: [{ requirement: 'Re-PPVT', case_status: 'Open' }] }), ['ppvt_self', 'reverification_cycles'])
+  assert.deepEqual(keys({ ...base, msil_scope: 'MSIL scope', reverification_cycles: [{ requirement: 'Re-PPVT', case_status: 'Open' }] }), ['ppvt_msil', 'ppvt_self', 'reverification_cycles'])
+  assert.deepEqual(keys({ ...base, reverification_cycles: [{ requirement: 'Re-PPVT', case_status: 'Closed' }] }), [])
+  // After the new cycle row is added, the latest cycle is empty: nothing more starts.
+  assert.deepEqual(keys({ ...base, reverification_cycles: [{ requirement: 'Re-PPVT', case_status: 'Open' }, {}] }), [])
+  assert.equal(pv.fields.find((f) => f.key === 'ppvt_self')!.nextRow!.sendBack, 'Re-PPVT: enter the fresh PPVT results')
+})
+
+t('v65 migration: PPVT values in the 7-stage shape', () => {
+  const e = { id: 'e', templateRowId: 'r', activityId: 'sop-15', partNo: 'P', validationState: 'Submitted', history: [], currentStepIndex: 1, updatedAt: '', updatedBy: '',
+    values: { pic_verification_done: 'Y', ppvt_self: [{ volume: 1, ok_ng_details: 'x', ng_category: 'Red' }], ppvt_msil: [{ volume: 2, planned_date: '2026-01-01' }], reverification_cycles: [{ requirement: 'Re-PPVT', broad_quality_cm_category: 'y' }] } } as any
+  const out = migrateStore({ activities: [], entries: [e], masterLists: SEED_MASTER_LISTS }, 64, { activities: PP_ACTIVITIES, masterLists: SEED_MASTER_LISTS })
+  const v = out.entries[0].values
+  assert.deepEqual(v.ppvt_self, [{ volume: 1, ng_remark: 'x' }])
+  assert.deepEqual(v.ppvt_msil, [{ volume: 2, verification_done: 'Y' }])
+  assert.deepEqual(v.reverification_cycles, [{ requirement: 'Re-PPVT' }])
+  assert.equal('pic_verification_done' in v, false)
 })
 
 async function main() {

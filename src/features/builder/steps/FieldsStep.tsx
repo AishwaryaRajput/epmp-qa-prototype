@@ -1205,6 +1205,21 @@ function TableColumnsEditor({ field, onUpdate, allFields, params = [] }: { field
         <span className="font-medium">Keep a history per row</span>
         <span className="text-[var(--color-muted)]">(who changed which cells, and when — e.g. one row per re-verification cycle)</span>
       </label>
+      <label className="mb-2 flex items-center gap-1.5 text-[11px]">
+        <input type="checkbox" checked={!!field.lockEarlierRows} onChange={(e) => onUpdate({ lockEarlierRows: e.target.checked || undefined })} aria-label="Only the latest row can be edited" />
+        <span className="font-medium">Only the latest row can be edited</span>
+        <span className="text-[var(--color-muted)]">(earlier rows stay as read-only history)</span>
+      </label>
+      <div className="mb-2 space-y-1 text-[11px]">
+        <div className="font-medium">Start a new row when (checked on save; empty = never)</div>
+        <ConditionEditor value={field.nextRow?.when} onChange={(when) => onUpdate({ nextRow: when ? { ...field.nextRow, when } : undefined })} env={{ fields: allFields, params }} />
+        {field.nextRow && (
+          <label className="flex items-center gap-1.5">
+            <span>Send the form back with this comment</span>
+            <input value={field.nextRow.sendBack ?? ''} onChange={(e) => onUpdate({ nextRow: { ...field.nextRow!, sendBack: e.target.value || undefined } })} placeholder="(do not send back)" className={`${inputCls} w-80`} aria-label="Send back comment for a new row" />
+          </label>
+        )}
+      </div>
       <div className="mb-2 flex flex-wrap items-center gap-2 text-[11px]">
         <span className="font-medium">Rows can be added by</span>
         {PERSONAS.map((p) => (

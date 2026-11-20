@@ -463,6 +463,14 @@ export interface FieldDefinition {
   /** For a `table` field: every row keeps a history of who changed which cells, and when (shown in a History column). */
   logRows?: boolean
   /**
+   * For a `table` field: start a new (empty) row when this holds after a save — e.g. a cycle closed as "Open" starts the
+   * next cycle. Checked on the values before any row is added, so one save adds at most one row. `sendBack` returns a
+   * submitted form to its filler with that comment (e.g. "Re-PPVT: enter fresh PPVT results"). The rows count beyond maxRows.
+   */
+  nextRow?: { when: ConditionNode; sendBack?: string }
+  /** For a `table` field: only the latest row can be edited; earlier rows are kept read-only as history. */
+  lockEarlierRows?: boolean
+  /**
    * For a `table` field: 'form' shows each row as a card of labelled fields (only the columns that apply to that row),
    * instead of a wide grid — for tables with many conditional columns, e.g. one PPVT record. Absent = 'table'.
    */

@@ -53,6 +53,10 @@ export interface PpFieldSpec {
   optionsFrom?: string
   alwaysEditable?: boolean
   edocFrom?: string
+  /** Table: start a new row when … (FieldDefinition.nextRow). */
+  nextRow?: FieldDefinition['nextRow']
+  /** Table: only the latest row can be edited. */
+  lockEarlierRows?: boolean
   /** Vendor can see this field (read-only) even though they do not enter it. */
   vendor?: boolean
   /** Planned / hidden from form (FieldDefinition.hiddenFromForm). */
@@ -464,22 +468,36 @@ const HOMOLOG_CONFIG: PpActivityConfig = {
   }
 }
 
-// ── SOP15 · PPVT confirmation (the whole PPVT flow; SOP16 "Vendor PPVT details" is folded into it) ─────────────────
-// PPVT happens once: "PPVT details — Vendor" is the Vendor's single self-PPVT record; for MSIL-scope parts "PPVT
-// details — MSIL verification" is the PIC's own single check in the same fields (the PIC fills volume, OK / NG, NG
-// type, issues, capacity observed and rejection %; the Vendor fills the target dates and action plans). Both show as a
-// clean form: only the fields that apply (Quality NG → quality fields only). Shortage / day = Volume − Capacity
-// observed is calculated. Only when that PPVT is NG do re-verification cycles open (one card per cycle, PIC
-// requirement / status / categories / Open-Closed, Vendor dates); a Closed cycle locks the form.
+// ── SOP15 · PPVT confirmation — the client's 7-stage flow (SOP16 "Vendor PPVT details" is folded into it) ─────────────
+// 1 Part setup: QA department, SC, PIC, part no./name, vendor come from the part; every part is Vendor scope, the PIC
+//   marks selected parts MSIL scope.
+// 2 PPVT entry (Vendor): volume / day, target date, OK / NG (+ remark if NG); status Done / Not Done; OK closes the case;
+//   NG → NG type Quality / Capacity / Both.
+// 3 Capacity NG (Vendor): issue, capacity observed / day; Shortage / day = volume − observed (≤ 0 → "No shortage");
+//   action plan, capacity target date.   4 Quality NG (Vendor): issue, action plan, rejection %, quality target date.
+//   The Vendor then submits to the PIC.
+// 5 MSIL scope only (PIC): volume, OK / NG, NG type, capacity issue, capacity observed, quality issue, rejection %,
+//   entered blind (the Vendor's values are hidden from the PIC until the PIC marks the verification complete); shortage
+//   from the PIC's values; Vendor vs PIC comparison + vendor accuracy %. The PIC's values are final; the Vendor never sees
+//   them, nor the accuracy.
+// 6 Re-verification cycle (only if NG): PIC requirement (Re-PPVT / Countermeasure Verification / OK As It Is) and
+//   current status (description); capacity NG → PIC c/m category, Vendor implementation date; quality NG → PIC concern
+//   category, Vendor implementation date; Vendor target date (if pending) and final date for closure.
+// 7 Closure: PIC sets Open / Closed. Closed → complete, read-only. Open → the next cycle starts; with Re-PPVT the Vendor
+//   enters fresh PPVT results (back to stage 2; the form goes back to the Vendor). Every cycle and every PPVT entry is
+//   kept, with who changed what and when.
+// Not considered for EPMP (field sheet): Broad quality c/m category, PPVT NG category (R / Y / G).
 const P1 = '1 · Part setup'
-const P2 = '2 · PPVT details — Vendor (self PPVT)'
-const P5 = '3 · PPVT details — MSIL verification (MSIL scope only)'
+const P2 = '2 · PPVT details — Vendor'
+const P5 = '3 · MSIL PIC verification (MSIL scope only)'
 const P6 = '4 · Re-verification and closure'
 const NG_TYPES = ['Quality', 'Capacity', 'Both']
 const MSIL_SCOPE = eq(F('msil_scope'), K('MSIL scope'))
-const PIC_DONE = eq(F('pic_verification_done'), K('Y'))
 const SELF = 'ppvt_self'
 const MSIL = 'ppvt_msil'
+const CYCLES = 'reverification_cycles'
+// The PIC has completed the (latest) MSIL verification: only then are the Vendor's values shown to the PIC.
+const PIC_DONE = eq(F(`${MSIL}.verification_done`), K('Y'))
 // Row conditions (a field operand reads the row's own cell first).
 const rNg = eq(F('result'), K('NG'))
 const rCap = AND(rNg, OR(eq(F('ng_type'), K('Capacity')), eq(F('ng_type'), K('Both'))))
@@ -493,75 +511,83 @@ const finalOf = (col: string): CalcSpec => ({
 const fNg = eq(F('final_ppvt_result'), K('NG'))
 const fCap = AND(fNg, OR(eq(F('final_ng_type'), K('Capacity')), eq(F('final_ng_type'), K('Both'))))
 const fQual = AND(fNg, OR(eq(F('final_ng_type'), K('Quality')), eq(F('final_ng_type'), K('Both'))))
-const CYCLES = 'reverification_cycles'
 const CASE_CLOSED = anyRow(CYCLES, eq(F('case_status'), K('Closed')))
+// Re-verification shows once the PPVT is NG, and stays (with its cycles) while a Re-PPVT is being redone.
+const CYCLES_ON = OR(fNg, anyRow(CYCLES, filled(F('requirement'))))
 // A cycle with an action to carry out (Re-PPVT or Countermeasure verification) — not "OK as it is" — asks for dates.
 const ACTING = OR(eq(F('requirement'), K('Re-PPVT')), eq(F('requirement'), K('Countermeasure Verification')))
+// Stage 7: the latest cycle closed as Open starts the next one; with Re-PPVT the PPVT itself is done again.
+const CYCLE_OPEN = eq(F(`${CYCLES}.case_status`), K('Open'))
+const RE_PPVT = AND(CYCLE_OPEN, eq(F(`${CYCLES}.requirement`), K('Re-PPVT')))
 const show = (when: ConditionNode): FieldRule[] => [{ when, action: 'show' }]
-// The PPVT columns, shared by both tables; `pic` = the columns the PIC fills in the MSIL-verification table.
-const ppvtCols = (pic: boolean): TableColumn[] => {
-  const by = (picCol: boolean) => (pic ? (picCol ? 'PIC' : 'Vendor') : undefined) as PersonaId | undefined
-  // In the MSIL table the Vendor's columns (target dates, action plans) open once the PIC has completed the check.
-  const vendorCol = (rule: ConditionNode | undefined): ConditionNode | undefined => (pic ? (rule ? AND(PIC_DONE, rule) : PIC_DONE) : rule)
-  return [
-    { key: 'volume', label: 'PPVT volume / day', type: 'number', enteredBy: by(true), required: true },
-    // MSIL scope (field sheet "PPVT MSIL scope planned date / actual date"): the PIC's own PPVT dates.
-    ...(pic ? [
-      { key: 'planned_date', label: 'MSIL PPVT planned date', type: 'date', enteredBy: 'PIC' } as TableColumn,
-      { key: 'actual_date', label: 'MSIL PPVT actual date', type: 'date', enteredBy: 'PIC' } as TableColumn
-    ] : []),
-    { key: 'target_date', label: 'PPVT target date', type: 'date', enteredBy: by(false), required: !pic, showRule: vendorCol(undefined) },
-    { key: 'result', label: 'PPVT OK / NG', type: 'dropdown', options: ['OK', 'NG'], enteredBy: by(true), required: true },
-    { key: 'ok_ng_details', label: 'PPVT OK / NG details', type: 'longText', enteredBy: by(true) },
-    { key: 'ng_type', label: 'If NG: Quality or Capacity NG', type: 'dropdown', options: NG_TYPES, enteredBy: by(true), showRule: rNg, requiredRule: rNg },
-    { key: 'ng_category', label: 'PPVT NG category', type: 'dropdown', options: ['Red', 'Yellow', 'Green'], enteredBy: by(true), showRule: rNg, requiredRule: rNg },
-    { key: 'capacity_issue', label: 'Capacity NG issue', type: 'text', enteredBy: by(true), showRule: rCap, requiredRule: rCap },
-    { key: 'capacity_observed', label: 'Capacity observed / day (actual volume / 16 hrs at 80% efficiency)', type: 'number', enteredBy: by(true), showRule: rCap, requiredRule: rCap },
-    {
-      key: 'shortage', label: 'Shortage / day', type: 'text', enteredBy: 'System', showRule: rCap,
-      calc: { rules: [{ when: gt(F('volume'), F('capacity_observed')), value: { kind: 'math', op: '-', left: F('volume'), right: F('capacity_observed') } }, { when: AND(filled(F('volume')), filled(F('capacity_observed'))), value: val('No shortage') }] }
-    },
-    { key: 'capacity_action_plan', label: 'Capacity action plan', type: 'text', enteredBy: by(false), showRule: vendorCol(rCap), requiredRule: pic ? undefined : rCap },
-    { key: 'capacity_target_date', label: 'Capacity target date', type: 'date', enteredBy: by(false), showRule: vendorCol(rCap), requiredRule: pic ? undefined : rCap },
-    { key: 'quality_issue', label: 'Quality issue', type: 'text', enteredBy: by(true), showRule: rQual, requiredRule: rQual },
-    { key: 'quality_action_plan', label: 'Quality action plan', type: 'text', enteredBy: by(false), showRule: vendorCol(rQual), requiredRule: pic ? undefined : rQual },
-    { key: 'rejection_pct', label: 'Rejection %', type: 'number', enteredBy: by(true), showRule: rQual, requiredRule: rQual },
-    { key: 'quality_target_date', label: 'Quality target date', type: 'date', enteredBy: by(false), showRule: vendorCol(rQual), requiredRule: pic ? undefined : rQual }
-  ]
+const shortage: TableColumn = {
+  key: 'shortage', label: 'Shortage / day', type: 'text', enteredBy: 'System', showRule: rCap,
+  calc: { rules: [{ when: gt(F('volume'), F('capacity_observed')), value: { kind: 'math', op: '-', left: F('volume'), right: F('capacity_observed') } }, { when: AND(filled(F('volume')), filled(F('capacity_observed'))), value: val('No shortage') }] }
 }
+// Stages 2–4 · the Vendor's PPVT (one entry per PPVT; a Re-PPVT adds the next one).
+const SELF_COLS: TableColumn[] = [
+  { key: 'volume', label: 'PPVT volume / day', type: 'number', required: true },
+  { key: 'target_date', label: 'PPVT target date', type: 'date', required: true },
+  { key: 'result', label: 'PPVT OK / NG', type: 'dropdown', options: ['OK', 'NG'], required: true },
+  { key: 'ng_remark', label: 'NG remark', type: 'longText', showRule: rNg, requiredRule: rNg },
+  { key: 'ng_type', label: 'If NG: Quality or Capacity NG', type: 'dropdown', options: NG_TYPES, showRule: rNg, requiredRule: rNg },
+  { key: 'capacity_issue', label: 'Capacity NG issue', type: 'longText', showRule: rCap, requiredRule: rCap },
+  { key: 'capacity_observed', label: 'Capacity observed / day (actual volume / 16 hrs at 80% efficiency)', type: 'number', showRule: rCap, requiredRule: rCap },
+  shortage,
+  { key: 'capacity_action_plan', label: 'Capacity action plan', type: 'longText', showRule: rCap, requiredRule: rCap },
+  { key: 'capacity_target_date', label: 'Capacity target date', type: 'date', showRule: rCap, requiredRule: rCap },
+  { key: 'quality_issue', label: 'Quality issue', type: 'longText', showRule: rQual, requiredRule: rQual },
+  { key: 'quality_action_plan', label: 'Quality action plan', type: 'longText', showRule: rQual, requiredRule: rQual },
+  { key: 'rejection_pct', label: 'Rejection %', type: 'number', showRule: rQual, requiredRule: rQual },
+  { key: 'quality_target_date', label: 'Quality target date', type: 'date', showRule: rQual, requiredRule: rQual }
+]
+// Stage 5 · the PIC's own observation (MSIL scope); the action plans and target dates stay the Vendor's (stages 3–4).
+const MSIL_COLS: TableColumn[] = [
+  { key: 'volume', label: 'PPVT volume / day', type: 'number', required: true },
+  { key: 'result', label: 'PPVT OK / NG', type: 'dropdown', options: ['OK', 'NG'], required: true },
+  { key: 'ng_type', label: 'If NG: Quality or Capacity NG', type: 'dropdown', options: NG_TYPES, showRule: rNg, requiredRule: rNg },
+  { key: 'capacity_issue', label: 'Capacity NG issue', type: 'longText', showRule: rCap },
+  { key: 'capacity_observed', label: 'Capacity observed / day (actual volume / 16 hrs at 80% efficiency)', type: 'number', showRule: rCap, requiredRule: rCap },
+  shortage,
+  { key: 'quality_issue', label: 'Quality issue', type: 'longText', showRule: rQual, requiredRule: rQual },
+  { key: 'rejection_pct', label: 'Rejection %', type: 'number', showRule: rQual, requiredRule: rQual },
+  { key: 'verification_done', label: 'PIC verification complete (show the comparison with the Vendor’s values)', type: 'dropdown', options: ['Y', 'N'] }
+]
 const PPVT: PpFieldSpec[] = [
-  // 1 · Part setup: QA department and SC from the part master (PIC, part no., part name and vendor head the form).
+  // 1 · Part setup (PIC, part no., part name and vendor head the form).
   { k: 'qa_department', l: 'QA department', t: 'text', by: 'System', src: 'calculated', vendor: true, section: P1, calc: { rules: [], else: { kind: 'operand', operand: { kind: 'part', attr: 'section' } } } },
-  { k: 'sc', l: 'SC (supply chain)', t: 'text', by: 'System', src: 'calculated', vendor: true, section: P1, calc: { rules: [], else: { kind: 'operand', operand: { kind: 'part', attr: 'attrs.supply_chain_dept' } } } },
+  { k: 'sc', l: 'SC', t: 'text', by: 'System', src: 'calculated', vendor: true, section: P1, calc: { rules: [], else: { kind: 'operand', operand: { kind: 'part', attr: 'attrs.supply_chain_dept' } } } },
   { k: 'msil_scope', l: 'MSIL scope or Vendor scope', t: 'dropdown', o: ['Vendor scope', 'MSIL scope'], by: 'PIC', section: P1, dash: true, list: true },
-  // 2 · The Vendor's self PPVT: one record (no rows to add). Hidden from the PIC while the PIC checks blind.
+  // 2–4 · The Vendor's PPVT. Hidden from the PIC while the PIC checks an MSIL-scope part blind. A Re-PPVT (stage 7)
+  // adds the next entry and returns the form to the Vendor; earlier entries stay read-only with their history.
   {
-    k: SELF, l: 'PPVT details — Vendor (self PPVT)', t: 'table', by: 'Vendor', val: true, section: P2, maxRows: 1, logRows: true, layout: 'form',
-    hiddenFrom: { roles: ['PIC'], when: AND(MSIL_SCOPE, ne(F('pic_verification_done'), K('Y'))) },
-    cols: ppvtCols(false)
+    k: SELF, l: 'PPVT details — Vendor', t: 'table', by: 'Vendor', val: true, section: P2, maxRows: 1, logRows: true, layout: 'form', rowNoun: 'PPVT',
+    lockEarlierRows: true, nextRow: { when: RE_PPVT, sendBack: 'Re-PPVT: enter the fresh PPVT results' },
+    hiddenFrom: { roles: ['PIC'], when: AND(MSIL_SCOPE, ne(F(`${MSIL}.verification_done`), K('Y'))) },
+    cols: SELF_COLS
   },
   {
     k: 'ppvt_status', l: 'PPVT status', t: 'dropdown', o: ['Not Done', 'Done'], by: 'System', src: 'calculated', vendor: true, dash: true, list: true, section: P2,
-    calc: { rules: [{ when: filled(F('final_ppvt_result')), value: val('Done') }], else: val('Not Done') }
+    calc: { rules: [{ when: filled(F(`${SELF}.result`)), value: val('Done') }], else: val('Not Done') }
   },
-  // 3 · MSIL verification (MSIL scope only): the PIC's own row(s) in the same columns; the Vendor sees the table only
-  // after the PIC completes the check, and then fills its target dates and action plans.
+  // 5 · MSIL PIC verification (MSIL scope only). Never shown to the Vendor. A Re-PPVT adds the PIC's next check too.
   {
-    k: MSIL, l: 'PPVT details — MSIL verification (PIC)', t: 'table', by: 'PIC', alsoBy: ['Vendor'], vendor: true, section: P5, maxRows: 1, logRows: true, layout: 'form',
-    hiddenFrom: { roles: ['Vendor'], when: ne(F('pic_verification_done'), K('Y')) },
-    frules: [...show(MSIL_SCOPE), { when: AND(MSIL_SCOPE, PIC_DONE), action: 'makeMandatory' }, { when: AND(MSIL_SCOPE, PIC_DONE), action: 'makeEditable' }],
-    cols: ppvtCols(true)
+    k: MSIL, l: 'PPVT details — MSIL PIC verification', t: 'table', by: 'PIC', section: P5, maxRows: 1, logRows: true, layout: 'form', rowNoun: 'verification',
+    lockEarlierRows: true, nextRow: { when: AND(MSIL_SCOPE, RE_PPVT) },
+    hiddenFrom: { roles: ['Vendor'] },
+    // Not mandatory: the PIC sets the scope first and verifies after the Vendor's PPVT (the case cannot close on OK
+    // until the PIC's verification is complete — see the case status).
+    frules: [...show(MSIL_SCOPE), { when: MSIL_SCOPE, action: 'makeEditable' }],
+    cols: MSIL_COLS
   },
-  { k: 'pic_verification_done', l: 'PIC verification complete (show the comparison with the Vendor’s values)', t: 'yesNo', by: 'PIC', section: P5, frules: show(MSIL_SCOPE) },
   {
-    k: 'vendor_vs_pic', l: 'Vendor vs PIC (latest cycle)', t: 'comparison', by: 'System', section: P5, hiddenFrom: { roles: ['Vendor'] }, frules: show(AND(MSIL_SCOPE, PIC_DONE)),
+    k: 'vendor_vs_pic', l: 'Vendor vs PIC', t: 'comparison', by: 'System', section: P5, hiddenFrom: { roles: ['Vendor'] }, frules: show(AND(MSIL_SCOPE, PIC_DONE)),
     compare: {
       leftLabel: 'Vendor', rightLabel: 'PIC (final)',
       pairs: [
         { label: 'PPVT volume / day', left: `${SELF}.volume`, right: `${MSIL}.volume` },
         { label: 'PPVT OK / NG', left: `${SELF}.result`, right: `${MSIL}.result` },
         { label: 'NG type', left: `${SELF}.ng_type`, right: `${MSIL}.ng_type` },
-        { label: 'PPVT NG category', left: `${SELF}.ng_category`, right: `${MSIL}.ng_category` },
         { label: 'Capacity NG issue', left: `${SELF}.capacity_issue`, right: `${MSIL}.capacity_issue` },
         { label: 'Capacity observed / day', left: `${SELF}.capacity_observed`, right: `${MSIL}.capacity_observed` },
         { label: 'Shortage / day', left: `${SELF}.shortage`, right: `${MSIL}.shortage` },
@@ -574,29 +600,27 @@ const PPVT: PpFieldSpec[] = [
     k: 'vendor_accuracy', l: 'Vendor accuracy %', t: 'percent', by: 'System', src: 'calculated', dash: true, section: P5, hiddenFrom: { roles: ['Vendor'] }, frules: show(AND(MSIL_SCOPE, PIC_DONE)),
     calc: { rules: [{ when: AND(MSIL_SCOPE, PIC_DONE), value: { kind: 'matchPct', pairs: (['volume', 'result', 'ng_type', 'capacity_issue', 'capacity_observed', 'shortage', 'quality_issue', 'rejection_pct'] as const).map((c) => [`${SELF}.${c}`, `${MSIL}.${c}`] as [string, string]) } }] }
   },
-  // Final values: the PIC's for MSIL-scope parts (once entered), else the Vendor's; latest cycle. Not shown to the Vendor.
+  // Final values: the PIC's for MSIL-scope parts (once entered), else the Vendor's; latest entry. Not shown to the Vendor.
   { k: 'final_ppvt_result', l: 'Final PPVT result', t: 'dropdown', o: ['OK', 'NG'], by: 'System', src: 'calculated', dash: true, list: true, section: P5, hiddenFrom: { roles: ['Vendor'] }, calc: finalOf('result') },
   { k: 'final_ng_type', l: 'Final NG type', t: 'dropdown', o: NG_TYPES, by: 'System', src: 'calculated', dash: true, section: P5, hiddenFrom: { roles: ['Vendor'] }, calc: finalOf('ng_type'), frules: show(fNg) },
   { k: 'final_shortage_per_day', l: 'Final shortage / day', t: 'text', by: 'System', src: 'calculated', dash: true, section: P5, hiddenFrom: { roles: ['Vendor'] }, calc: finalOf('shortage'), frules: show(fCap) },
-  // 4 · Re-verification — only when the PPVT is NG: one card per cycle, filled by the PIC and the Vendor together.
-  // An NG PPVT takes one of three actions: Re-PPVT, Countermeasure verification, or OK as it is (NG accepted).
-  // "OK as it is" needs no dates; the other two ask for the target / implementation / closure dates. PIC: requirement, status, categories, Open / Closed;
-  // Vendor: implementation dates, target date (if pending), final date for closure. Every row keeps its history.
+  // 6–7 · Re-verification, one card per cycle (only if NG). PIC: requirement, current status, categories, Open / Closed.
+  // Vendor: implementation dates, target date (if pending), final date for closure. "OK As It Is" needs no dates.
+  // Open → the next cycle starts (earlier cycles read-only, each with its history); Closed → the form is read-only.
   {
-    k: CYCLES, l: 'Re-verification cycles (PPVT NG)', t: 'table', by: 'PIC', alsoBy: ['Vendor'], vendor: true, section: P6, logRows: true, addRowsBy: ['PIC', 'Vendor'], layout: 'form', rowNoun: 'cycle', minRows: 1,
-    frules: [...show(fNg), { when: fNg, action: 'makeEditable' }],
+    k: CYCLES, l: 'Re-verification cycles (PPVT NG)', t: 'table', by: 'PIC', alsoBy: ['Vendor'], vendor: true, section: P6, logRows: true, layout: 'form', rowNoun: 'cycle', maxRows: 1,
+    lockEarlierRows: true, nextRow: { when: CYCLE_OPEN },
+    frules: [...show(CYCLES_ON), { when: CYCLES_ON, action: 'makeEditable' }],
     cols: [
-      // Shared by the PIC and the Vendor (no column owner = the table's roles: PIC and Vendor).
-      { key: 'requirement', label: 'Action on PPVT NG', type: 'dropdown', options: ['Re-PPVT', 'Countermeasure Verification', 'OK As It Is'], required: true },
-      { key: 'current_status', label: 'Current status (description)', type: 'longText' },
-      { key: 'target_date_if_pending', label: 'Target date (if pending)', type: 'date', enteredBy: 'Vendor', showRule: ACTING },
-      { key: 'case_status', label: 'Current status for PPVT NG case (Open / Closed)', type: 'dropdown', options: ['Open', 'Closed'], enteredBy: 'PIC', required: true },
+      { key: 'requirement', label: 'Requirement (Re-PPVT / Countermeasure Verification / OK As It Is)', type: 'dropdown', options: ['Re-PPVT', 'Countermeasure Verification', 'OK As It Is'], enteredBy: 'PIC', required: true },
+      { key: 'current_status', label: 'Current status (description)', type: 'longText', enteredBy: 'PIC' },
       { key: 'capacity_cm_category', label: 'Capacity NG c/m category', type: 'dropdown', options: ['Additional facility installed', 'Additional working hours (not 3 shifts)', 'Three-shift working'], enteredBy: 'PIC', showRule: AND(fCap, ACTING) },
       { key: 'capacity_impl_date', label: 'Implementation date for capacity NG c/m', type: 'date', enteredBy: 'Vendor', showRule: AND(fCap, ACTING) },
       { key: 'quality_concern_category', label: 'Quality NG concern category', type: 'dropdown', options: ['Part correction', 'Process correction', 'Both'], enteredBy: 'PIC', showRule: AND(fQual, ACTING) },
-      { key: 'broad_quality_cm_category', label: 'Broad quality countermeasure category', type: 'longText', enteredBy: 'PIC', showRule: AND(fQual, ACTING) },
       { key: 'quality_impl_date', label: 'Implementation date for quality NG c/m', type: 'date', enteredBy: 'Vendor', showRule: AND(fQual, ACTING) },
-      { key: 'final_closure_date', label: 'Final date for closure', type: 'date', enteredBy: 'Vendor', showRule: ACTING }
+      { key: 'target_date_if_pending', label: 'Target date (if pending)', type: 'date', enteredBy: 'Vendor', showRule: ACTING },
+      { key: 'final_closure_date', label: 'Final date for closure', type: 'date', enteredBy: 'Vendor', showRule: ACTING },
+      { key: 'case_status', label: 'Current status for PPVT NG case (Open / Closed)', type: 'dropdown', options: ['Open', 'Closed'], enteredBy: 'PIC', required: true }
     ]
   },
   // Closure.
@@ -604,8 +628,10 @@ const PPVT: PpFieldSpec[] = [
     k: 'ppvt_case_status', l: 'PPVT case status', t: 'dropdown', o: ['Not done', 'Open', 'Closed'], by: 'System', src: 'calculated', vendor: true, dash: true, list: true, section: P6,
     calc: {
       rules: [
-        { when: blank(F('final_ppvt_result')), value: val('Not done') },
         { when: CASE_CLOSED, value: val('Closed') },
+        // A Re-PPVT being redone: the case stays Open while the fresh results are awaited.
+        { when: AND(blank(F('final_ppvt_result')), anyRow(CYCLES, filled(F('requirement')))), value: val('Open') },
+        { when: blank(F('final_ppvt_result')), value: val('Not done') },
         // OK closes the case — for an MSIL-scope part only once the PIC's verification is in.
         { when: AND(eq(F('final_ppvt_result'), K('OK')), OR(ne(F('msil_scope'), K('MSIL scope')), PIC_DONE)), value: val('Closed') }
       ],
@@ -636,13 +662,23 @@ const PPVT_CONFIG: PpActivityConfig = {
     },
     {
       id: 'pv-4', name: '4 · MSIL scope: Vendor says OK, PIC finds Capacity NG → PIC is final; comparison and accuracy', mrd: '2027-01-15', today: '2026-11-30',
-      input: { msil_scope: 'MSIL scope', ppvt_self: [{ volume: 675, result: 'OK' }], ppvt_msil: [{ volume: 675, result: 'NG', ng_type: 'Capacity', capacity_issue: 'One press', capacity_observed: 540 }], pic_verification_done: 'Y' },
+      input: { msil_scope: 'MSIL scope', ppvt_self: [{ volume: 675, result: 'OK' }], ppvt_msil: [{ volume: 675, result: 'NG', ng_type: 'Capacity', capacity_issue: 'One press', capacity_observed: 540, verification_done: 'Y' }] },
       expect: { values: { final_ppvt_result: 'NG', final_ng_type: 'Capacity', 'ppvt_msil.shortage': 135, final_shortage_per_day: 135, vendor_accuracy: 17, ppvt_case_status: 'Open' }, visible: ['vendor_vs_pic', 'reverification_cycles'] }
     },
     {
       id: 'pv-5', name: '5 · A cycle marked Closed closes the case', mrd: '2027-01-15', today: '2026-11-30',
       input: { ppvt_self: [{ volume: 675, result: 'NG', ng_type: 'Quality' }], reverification_cycles: [{ requirement: 'Countermeasure Verification', current_status: 'Verified and OK', quality_concern_category: 'Process correction', case_status: 'Closed' }] },
       expect: { values: { ppvt_case_status: 'Closed' } }
+    },
+    {
+      id: 'pv-6', name: '6 · MSIL scope: the PIC enters blind (Vendor values hidden from the PIC until verification complete); the Vendor never sees the PIC values', mrd: '2027-01-15', today: '2026-11-30',
+      input: { msil_scope: 'MSIL scope', ppvt_self: [{ volume: 675, target_date: '2026-11-20', result: 'OK' }], ppvt_msil: [{ volume: 600, result: 'NG', ng_type: 'Capacity', capacity_observed: 500 }] },
+      expect: { values: { final_ppvt_result: 'NG', ppvt_case_status: 'Open' }, hidden: ['vendor_vs_pic', 'vendor_accuracy'] }
+    },
+    {
+      id: 'pv-7', name: '7 · NG remark and NG type only when NG; OK needs neither', mrd: '2027-01-15', today: '2026-11-30',
+      input: { ppvt_self: [{ volume: 675, target_date: '2026-11-20', result: 'OK' }] },
+      expect: { values: { ppvt_case_status: 'Closed', ppvt_status: 'Done' }, hidden: ['reverification_cycles'] }
     }
   ] as TestScenario[]
 }

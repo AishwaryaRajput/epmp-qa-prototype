@@ -859,6 +859,12 @@ export function groupRepeat(
   return { state: { status: 'filling', rounds: [], cycles: [...cycles, closed] }, values: next, cleared }
 }
 
+/** Tables whose "start a new row when" holds on these values (all decided before any row is added). */
+export function rowsToStart(def: Pick<ActivityDefinition, 'fields' | 'groupReviews' | 'parameters'>, values: Record<string, any>, extra: RuleExtra): FieldDefinition[] {
+  const ctx = buildRuleCtx(def, values, extra)
+  return def.fields.filter((f) => f.type === 'table' && f.nextRow && evalCondition(f.nextRow.when, ctx))
+}
+
 // ── C8: deviation trigger ───────────────────────────────────────────────────────────────────────────────────────
 
 /** What the deviation still needs (raised answer, E-Doc number, status), or null. Used where the answers are not form fields (pop-up only). */

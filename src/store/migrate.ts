@@ -14,7 +14,10 @@ import { legacyToRules, normalizeReasonRemark } from '../engine/rules'
 // v49: OT status (pp-9) corrections — new pp-9 definition (taken from the seed via RULE_CONFIG_IDS), plain-text reason +
 // remark values turned into { reason, remark } (any activity), old pp-9 status words cleared, the Delay / Non-OT reason
 // lists replaced unless an Admin had edited them.
-export const STORE_VERSION = 64
+export const STORE_VERSION = 65
+// v65: PPVT (sop-15) rebuilt to the client's 7-stage flow: "PIC verification complete" moves into the PIC's (latest)
+// MSIL verification row; the NG remark keeps any old OK / NG details; fields not considered for EPMP are dropped
+// (PPVT NG category, broad quality c/m category, MSIL planned / actual dates). New sop-15 from the seed.
 // v64: no E-Doc integration — every E-Doc number and deviation approval status is entered by the PIC; approval statuses
 // are Approved / Pending / Rejected (old values mapped). OT reason tables gain an Action plan column (from the seed).
 // v63: SOR sharing (pp-3) and SOR Adherence (mpp-12) take the current seed definition on upgrade (an older stored pp-3
@@ -262,8 +265,30 @@ function migrateSorPoints(entry: ActivityEntry): ActivityEntry {
   return { ...entry, values: { ...entry.values, disagreed_points: next } }
 }
 
+/** v65: PPVT values in the 7-stage shape. */
+function migratePpvt(entry: ActivityEntry): ActivityEntry {
+  const v = { ...(entry.values ?? {}) }
+  const strip = (rows: unknown, drop: string[], rename: Record<string, string> = {}) =>
+    Array.isArray(rows) ? rows.map((r0: Record<string, any>) => {
+      const r = { ...r0 }
+      for (const [from, to] of Object.entries(rename)) if (from in r) { if (r[to] === undefined || r[to] === '') r[to] = r[from]; delete r[from] }
+      for (const k of drop) delete r[k]
+      return r
+    }) : rows
+  v.ppvt_self = strip(v.ppvt_self, ['ng_category'], { ok_ng_details: 'ng_remark' })
+  v.ppvt_msil = strip(v.ppvt_msil, ['ng_category', 'ok_ng_details', 'planned_date', 'actual_date'])
+  v.reverification_cycles = strip(v.reverification_cycles, ['broad_quality_cm_category'])
+  if ('pic_verification_done' in v) {
+    const rows: Record<string, any>[] = Array.isArray(v.ppvt_msil) ? v.ppvt_msil : []
+    if (rows.length && v.pic_verification_done) rows[rows.length - 1] = { ...rows[rows.length - 1], verification_done: v.pic_verification_done }
+    delete v.pic_verification_done
+  }
+  for (const k of Object.keys(v)) if (v[k] === undefined) delete v[k]
+  return { ...entry, values: v }
+}
+
 export function migrateEntryValues(activityId: string, entry0: ActivityEntry): ActivityEntry {
-  const entry0b = activityId === 'pp-3' ? migrateSorPoints(entry0) : entry0
+  const entry0b = activityId === 'pp-3' ? migrateSorPoints(entry0) : activityId === 'sop-15' ? migratePpvt(entry0) : entry0
   const entry = migrateV50(activityId, entry0b)
   if (activityId !== 'pp-9') return entry
   const v = { ...entry.values }

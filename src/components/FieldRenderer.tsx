@@ -446,7 +446,7 @@ export const fieldRendererRegistry: Record<string, FieldRendererEntry> = {
                     {cols.map((c) => {
                       // Row rules: a cell whose "show on a row when" does not hold reads "—" and cannot be typed into.
                       if (c.showRule && rowRule && !rowRule(c.showRule, r)) return <td key={c.key} className="px-2 py-1 text-[var(--color-muted)]">—</td>
-                      const editable = colEditable(c)
+                      const editable = colEditable(c) && !(field.lockEarlierRows && i < rows.length - 1)
                       return (
                         <td key={c.key} className="px-1 py-1 max-md:min-w-[128px]">
                           {c.type === 'dropdown' ? (

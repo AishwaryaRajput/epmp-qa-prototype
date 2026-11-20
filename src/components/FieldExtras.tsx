@@ -1,4 +1,5 @@
 /** Extra read-only pieces used by FieldRenderer: a table row's history and the side-by-side comparison field. */
+import { showDate } from './showDate'
 import type { FieldRendererProps } from './FieldRenderer'
 import type { FieldDefinition } from '../domain'
 import type { RowRule } from '../engine/rowReview'
@@ -92,6 +93,8 @@ interface FormRowsProps {
   setCell?: (i: number, key: string, v: any) => void
   removeRow?: (i: number) => void
 }
+/** Rows before the latest are read-only history (FieldDefinition.lockEarlierRows). */
+const rowLocked = (field: FieldDefinition, i: number, n: number) => !!field.lockEarlierRows && i < n - 1
 
 /**
  * A table in the 'form' layout (FieldDefinition.layout): every row is a card of labelled fields, and only the columns
@@ -101,7 +104,7 @@ interface FormRowsProps {
 export function FormRows({ field, rows, rowRule, colEditable, setCell, removeRow }: FormRowsProps) {
   const cols = field.columns ?? []
   const noun = field.rowNoun ? field.rowNoun[0].toUpperCase() + field.rowNoun.slice(1) : 'Row'
-  const many = field.maxRows !== 1
+  const many = field.maxRows !== 1 || rows.length > 1
   const inputCls = 'w-full rounded-lg border border-[var(--color-border)] bg-white px-2.5 py-1.5 text-sm disabled:bg-[var(--color-surface)] disabled:text-[var(--color-text)]'
   if (rows.length === 0) return <p className="text-xs text-[var(--color-muted)]">Nothing entered yet.</p>
   return (
@@ -122,7 +125,7 @@ export function FormRows({ field, rows, rowRule, colEditable, setCell, removeRow
                 const label = `${field.label} · ${c.label} ${i + 1}`
                 const owner = c.enteredBy ?? field.enteredBy
                 const system = owner === 'System' || !!c.calc
-                const editable = !system && !!colEditable?.(c) && !!setCell
+                const editable = !system && !!colEditable?.(c) && !!setCell && !rowLocked(field, i, rows.length)
                 const required = c.required || (c.requiredRule && rowRule?.(c.requiredRule, r))
                 const v = r[c.key]
                 return (
@@ -132,7 +135,7 @@ export function FormRows({ field, rows, rowRule, colEditable, setCell, removeRow
                     </div>
                     {system || !editable ? (
                       <div className={`min-h-[34px] rounded-lg px-2.5 py-1.5 text-sm ${system ? 'bg-[var(--color-surface)] font-medium' : 'bg-[var(--color-surface)]'} text-[var(--color-text)]`} aria-label={label}>
-                        {v === undefined || v === null || v === '' ? <span className="text-[var(--color-muted)]">—</span> : String(v)}
+                        {v === undefined || v === null || v === '' ? <span className="text-[var(--color-muted)]">—</span> : String(c.type === 'date' ? showDate(v) : v)}
                       </div>
                     ) : c.type === 'dropdown' ? (
                       <select value={v ?? ''} aria-label={label} onChange={(e) => setCell!(i, c.key, e.target.value)} className={inputCls}>

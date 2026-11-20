@@ -66,6 +66,8 @@ function toField(s0: PpFieldSpec): FieldDefinition {
     optionsFrom: s.optionsFrom,
     alwaysEditable: s.alwaysEditable || undefined,
     edocFrom: s.edocFrom,
+    nextRow: s.nextRow,
+    lockEarlierRows: s.lockEarlierRows || undefined,
     isDelayReason: DELAY_REASON_FIELD_KEYS.includes(s.k) || undefined,
     lateWhen: LATE_FIELD_VALUES[s.k],
     insight: INSIGHT_FIELDS[s.k],

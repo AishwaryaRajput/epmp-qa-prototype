@@ -36,7 +36,7 @@ import { makeEntryId, makeTemplateRowId, DELAY_REASON_OTHERS } from '../domain'
 import { syncArchetype } from '../domain/governance'
 import { putBlob, deleteBlob, clearBlobs } from './docBlobs'
 import { startReview } from '../engine/rowReview'
-import { detectNotifyChanges, toChange, groupSubmit, groupDecide, canDecideGroup, groupFieldKeys, groupsToRepeat, groupRepeat, ruleExtra, deviationRequired, overrideEvents, overrideNotices, fieldMissing, openLoopMessage } from '../engine/rules'
+import { detectNotifyChanges, toChange, groupSubmit, groupDecide, canDecideGroup, groupFieldKeys, groupsToRepeat, groupRepeat, rowsToStart, ruleExtra, deviationRequired, overrideEvents, overrideNotices, fieldMissing, openLoopMessage } from '../engine/rules'
 import { evaluateRules } from '../engine/saveRules'
 import { validateSave, issuesForTouched } from '../engine/saveRules'
 import type { SaveIssue } from '../engine/saveRules'
@@ -1312,6 +1312,24 @@ export const useQAStore = create<QAStoreState>()(
             }
             vals = evaluateCalculatedFields(activity, vals, part, rctx.mrd, undefined, { ...rctx, groupState: groupReviews })
             updatedEntry = { ...updatedEntry, values: vals, groupReviews, history: [...updatedEntry.history, ...logs] }
+          }
+
+          // "Start a new row when …" (e.g. a cycle closed as Open → the next cycle; Re-PPVT → fresh PPVT results): one
+          // empty row per table, decided on the saved values; a table with `sendBack` returns the form to its filler.
+          const starting = rowsToStart(activity, updatedEntry.values, { ...rctx, groupState: updatedEntry.groupReviews })
+          if (starting.length > 0) {
+            let vals = { ...updatedEntry.values }
+            for (const f of starting) vals[f.key] = [...(Array.isArray(vals[f.key]) ? vals[f.key] : []), {}]
+            vals = evaluateCalculatedFields(activity, vals, part, rctx.mrd, undefined, { ...rctx, groupState: updatedEntry.groupReviews })
+            const back = starting.find((f) => f.nextRow!.sendBack)
+            const sendBack = !!back && (updatedEntry.validationState === 'Submitted' || updatedEntry.validationState === 'Approved')
+            const logs = starting.map((f) => ({ timestamp: now, persona: actor as any, action: `${f.label}: ${f.rowNoun ?? 'row'} ${(vals[f.key] as unknown[]).length} started` }))
+            if (sendBack) {
+              logs.push({ timestamp: now, persona: actor as any, action: 'Sent back', comment: back!.nextRow!.sendBack } as any)
+              const filler = back!.enteredBy && back!.enteredBy !== 'System' ? back!.enteredBy : 'Vendor'
+              notifications = [...notifications, { id: `ntf-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`, at: now, roles: [filler], partNo, rowId: templateRowId, activityId, title: `${activity.name}: sent back`, detail: back!.nextRow!.sendBack! }]
+            }
+            updatedEntry = { ...updatedEntry, values: vals, history: [...updatedEntry.history, ...logs], ...(sendBack ? { validationState: 'Sent back' as const, currentStepIndex: 0 } : {}) }
           }
 
           const updatedEntries = state.entries.map((e) =>
